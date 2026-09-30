@@ -1,0 +1,31 @@
+image: rust:latest
+
+stages:
+  - lint
+  - build
+  - test
+
+variables:
+  RUSTFLAGS: "-D warnings"
+
+rustfmt:
+  stage: lint
+  script:
+    - rustup component add rustfmt
+    - cargo fmt --check
+
+clippy:
+  stage: lint
+  script:
+    - rustup component add clippy
+    - cargo clippy --all-targets -- -D warnings
+
+build:
+  stage: build
+  script:
+    - cargo build --release --verbose
+
+test:
+  stage: test
+  script:
+    - cargo test

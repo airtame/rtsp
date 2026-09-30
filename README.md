@@ -3,9 +3,11 @@
 Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, built on
 [Tokio](https://tokio.rs).
 
-> **Status:** early development. The crate currently provides a TCP server that accepts
-> connections and can be shut down gracefully. RTSP message parsing, request routing and
-> client connections are not implemented yet; accepted connections are logged and closed.
+> **Status:** early development. The crate currently provides a TCP server that runs each
+> accepted connection in its own task and shuts them all down gracefully when stopped. RTSP
+> message parsing, request routing and the client side are not implemented yet; data received
+> on a connection is discarded, and connections stay open until the peer disconnects, the
+> server stops, or an optional idle timeout (`Server::with_connection_idle_timeout`) expires.
 
 ## Building, running and testing
 
@@ -22,7 +24,8 @@ This crate is a library; to run it, use one of the [examples](#examples).
 
 ### `server`
 
-Starts a server, logs incoming connections and shuts down on Ctrl+C.
+Starts a server with a 60 second connection idle timeout, logs each connection and why it
+closed, and closes all open connections on Ctrl+C.
 
 ```sh
 cargo run --example server                 # listens on 127.0.0.1:8554
@@ -30,17 +33,9 @@ cargo run --example server 0.0.0.0:8554    # listens on a custom address
 ```
 
 Log output defaults to `rtsp=debug`; override it with `RUST_LOG` (e.g. `RUST_LOG=rtsp=info`).
-To try it, connect from another terminal with `nc -z 127.0.0.1 8554`:
-
-```text
-[2026-09-30T09:51:59Z DEBUG rtsp::server::server] [rtsp] server bind successful to 127.0.0.1:8554
-RTSP server listening on rtsp://127.0.0.1:8554, press Ctrl+C to stop
-[2026-09-30T09:51:59Z DEBUG rtsp::server::server] [rtsp] server run loop started
-[2026-09-30T09:51:59Z DEBUG rtsp::server::server] [rtsp] new connection from 127.0.0.1:61959
-^C[2026-09-30T09:51:59Z DEBUG rtsp::server::server] [rtsp] server stop called
-[2026-09-30T09:51:59Z DEBUG rtsp::server::server] [rtsp] server cancellation token triggered
-RTSP server stopped
-```
+To try it, open connections from another terminal with `nc 127.0.0.1 8554`. A connection
+closes when `nc` exits, when nothing is typed into `nc` for 60 seconds, or when the server is
+stopped.
 
 ## License
 

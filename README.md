@@ -7,7 +7,9 @@ Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, b
 > accepted connection in its own task and shuts them all down gracefully when stopped. RTSP
 > message parsing, request routing and the client side are not implemented yet; data received
 > on a connection is discarded, and connections stay open until the peer disconnects, the
-> server stops, or an optional idle timeout (`Server::with_connection_idle_timeout`) expires.
+> server stops, an optional idle timeout (`Server::with_connection_idle_timeout`) expires, or
+> the embedder closes it through the `ConnectionHandle` passed to
+> `ServerDelegate::on_new_connection`.
 
 ## Building, running and testing
 

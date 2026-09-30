@@ -1,10 +1,10 @@
 use tokio::io::AsyncReadExt;
 
-use crate::connection::ConnectionCloseReason;
+use crate::connection::{ConnectionCloseReason, ConnectionHandle};
 
 const READ_BUFFER_SIZE: usize = 4096;
 
-pub struct Connection {
+pub(crate) struct Connection {
     stream: tokio::net::TcpStream,
     peer_addr: std::net::SocketAddr,
     cancellation_token: tokio_util::sync::CancellationToken,
@@ -12,24 +12,26 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new(
+    pub(crate) fn new(
         stream: tokio::net::TcpStream,
         peer_addr: std::net::SocketAddr,
         cancellation_token: tokio_util::sync::CancellationToken,
-    ) -> Self {
-        Self { stream, peer_addr, cancellation_token, idle_timeout: None }
+    ) -> (Self, ConnectionHandle) {
+        let handle = ConnectionHandle::new(peer_addr, cancellation_token.clone());
+
+        (Self { stream, peer_addr, cancellation_token, idle_timeout: None }, handle)
     }
 
-    pub fn with_idle_timeout(mut self, timeout: std::time::Duration) -> Self {
+    pub(crate) fn with_idle_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.idle_timeout = Some(timeout);
         self
     }
 
-    pub fn peer_addr(&self) -> std::net::SocketAddr {
+    pub(crate) fn peer_addr(&self) -> std::net::SocketAddr {
         self.peer_addr
     }
 
-    pub async fn run(mut self) -> ConnectionCloseReason {
+    pub(crate) async fn run(mut self) -> ConnectionCloseReason {
         log::debug!("[rtsp] connection loop from {} started", self.peer_addr);
 
         let mut idle_timer =

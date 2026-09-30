@@ -1,5 +1,5 @@
 mod connection;
 mod server;
 
-pub use connection::{Connection, ConnectionCloseReason};
-pub use server::Server;
+pub use connection::{ConnectionCloseReason, ConnectionHandle};
+pub use server::{Server, ServerDelegate};

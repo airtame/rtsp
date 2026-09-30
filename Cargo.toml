@@ -1,6 +1,21 @@
 [package]
 name = "rtsp"
+description = "Asynchronous RTSP 1.0/2.0 server and client connections, with request routing"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+readme = "README.md"
+keywords = ["rtsp", "streaming", "tokio", "async", "protocol"]
+categories = ["network-programming", "multimedia", "asynchronous"]
+
+[lints.clippy]
+module_inception = "allow"
 
 [dependencies]
+tokio = { version = "1.38", features = ["net", "macros"] }
+tokio-util = "0.7.12"
+log = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1.38", features = ["net", "macros", "rt", "rt-multi-thread", "signal", "time"] }
+env_logger = "0.11"

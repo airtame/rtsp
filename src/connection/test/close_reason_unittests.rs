@@ -21,3 +21,13 @@ fn display_io_includes_underlying_error() {
 
     assert_eq!(ConnectionCloseReason::Io(err).to_string(), "connection I/O error: reset by test");
 }
+
+#[test]
+fn display_invalid_message_includes_underlying_error() {
+    let err = MessageError::InvalidHeader("CSeq 1".to_owned());
+
+    assert_eq!(
+        ConnectionCloseReason::InvalidMessage(err).to_string(),
+        r#"invalid message: invalid header: "CSeq 1""#
+    );
+}

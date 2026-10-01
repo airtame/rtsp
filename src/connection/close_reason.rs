@@ -1,9 +1,12 @@
+use crate::message::MessageError;
+
 #[derive(Debug)]
 pub enum ConnectionCloseReason {
     ClosedByPeer,
     Cancelled,
     Io(std::io::Error),
     IdleTimeout,
+    InvalidMessage(MessageError),
 }
 
 impl std::fmt::Display for ConnectionCloseReason {
@@ -13,6 +16,7 @@ impl std::fmt::Display for ConnectionCloseReason {
             Self::Cancelled => write!(f, "connection cancelled"),
             Self::Io(err) => write!(f, "connection I/O error: {err}"),
             Self::IdleTimeout => write!(f, "connection idle timeout"),
+            Self::InvalidMessage(err) => write!(f, "invalid message: {err}"),
         }
     }
 }

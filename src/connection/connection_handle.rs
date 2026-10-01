@@ -17,7 +17,7 @@ impl ConnectionHandle {
     }
 
     pub fn close(&self) {
-        log::debug!("[rtsp] connection close requested by embedder for {}.", self.peer_addr);
+        log::debug!("[rtsp] connection close requested by embedder for {}", self.peer_addr);
         self.cancellation_token.cancel();
     }
 }

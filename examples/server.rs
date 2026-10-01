@@ -5,11 +5,12 @@
 //! cargo run --example server 0.0.0.0:8554  # listens on a custom address
 //! ```
 //!
-//! Open a connection from another terminal with `nc 127.0.0.1 8554`. It stays open until
-//! `nc` exits (logged as "closed by peer"), nothing is typed into `nc` for 60 seconds (logged
-//! as "idle timeout"), or the server is stopped with Ctrl+C, which closes every open
-//! connection (logged as "cancelled") before the server exits. `PrintingDelegate` prints each
-//! new connection and why it closed.
+//! Send a request from another terminal with
+//! `printf 'OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n' | nc 127.0.0.1 8554`. The parsed request is
+//! logged, and the connection closes when `nc` exits (logged as "closed by peer"). A connection
+//! that gets no complete RTSP message for 60 seconds is closed (logged as "idle timeout"), and
+//! Ctrl+C closes every open connection (logged as "cancelled") before the server exits.
+//! `PrintingDelegate` prints each new connection and why it closed.
 
 const DEFAULT_ADDR: &str = "127.0.0.1:8554";
 const DEFAULT_CONNECTION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);

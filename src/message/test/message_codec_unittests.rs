@@ -10,11 +10,22 @@ fn buffer(bytes: &[u8]) -> tokio_util::bytes::BytesMut {
 }
 
 fn decode(src: &mut tokio_util::bytes::BytesMut) -> Option<Message> {
-    MessageCodec::default().decode(src).expect("decode should succeed")
+    MessageCodec::default()
+        .decode(src)
+        .expect("decode should succeed")
+        .map(|decoded| decoded.expect("message should be well-formed"))
 }
 
 fn decode_err(src: &mut tokio_util::bytes::BytesMut) -> MessageError {
     MessageCodec::default().decode(src).expect_err("decode should fail")
+}
+
+fn decode_malformed(src: &mut tokio_util::bytes::BytesMut) -> MalformedMessage {
+    MessageCodec::default()
+        .decode(src)
+        .expect("decode should succeed")
+        .expect("message should be complete")
+        .expect_err("message should be malformed")
 }
 
 fn decode_request(src: &mut tokio_util::bytes::BytesMut) -> Request {
@@ -109,6 +120,8 @@ fn decode_returns_pipelined_messages_one_at_a_time() {
 
     let first = codec.decode(&mut src).expect("decode should succeed").expect("first message");
     let second = codec.decode(&mut src).expect("decode should succeed").expect("second message");
+    let first = first.expect("first message should be well-formed");
+    let second = second.expect("second message should be well-formed");
 
     assert_eq!(first.to_string(), "OPTIONS * RTSP/1.0\nCSeq: 1");
     assert_eq!(second.to_string(), "OPTIONS * RTSP/1.0\nCSeq: 2");
@@ -323,27 +336,70 @@ fn decode_parses_whole_message_split_across_reads() {
 }
 
 #[test]
-fn decode_returns_error_for_invalid_request_line() {
+fn decode_returns_malformed_message_for_invalid_request_line() {
     let mut src = buffer(b"OPTIONS\r\nCSeq: 1\r\n\r\n");
 
-    let err = decode_err(&mut src);
+    let malformed = decode_malformed(&mut src);
 
     assert!(
-        matches!(&err, MessageError::InvalidRequestLine(line) if line == "OPTIONS"),
-        "unexpected error: {err:?}"
+        matches!(&malformed.error, MessageError::InvalidRequestLine(line) if line == "OPTIONS"),
+        "unexpected error: {:?}",
+        malformed.error
     );
+    assert_eq!(malformed.cseq.as_deref(), Some("1"));
+    assert!(src.is_empty());
 }
 
 #[test]
-fn decode_returns_error_for_invalid_status_line() {
+fn decode_returns_malformed_message_for_invalid_status_line() {
     let mut src = buffer(b"RTSP/1.0 2000 OK\r\nCSeq: 1\r\n\r\n");
 
-    let err = decode_err(&mut src);
+    let malformed = decode_malformed(&mut src);
 
     assert!(
-        matches!(&err, MessageError::InvalidStatusLine(line) if line == "RTSP/1.0 2000 OK"),
-        "unexpected error: {err:?}"
+        matches!(&malformed.error, MessageError::InvalidStatusLine(line) if line == "RTSP/1.0 2000 OK"),
+        "unexpected error: {:?}",
+        malformed.error
     );
+    assert_eq!(malformed.cseq.as_deref(), Some("1"));
+}
+
+#[test]
+fn decode_returns_malformed_message_without_cseq() {
+    let mut src = buffer(b"OPTIONS\r\n\r\n");
+
+    let malformed = decode_malformed(&mut src);
+
+    assert_eq!(malformed.cseq, None);
+}
+
+#[test]
+fn decode_continues_with_next_message_after_malformed_message() {
+    let mut codec = MessageCodec::default();
+    let mut src = buffer(b"OPTIONS\r\nCSeq: 1\r\n\r\nOPTIONS * RTSP/1.0\r\nCSeq: 2\r\n\r\n");
+
+    let first = codec.decode(&mut src).expect("decode should succeed").expect("first message");
+    let second = codec.decode(&mut src).expect("decode should succeed").expect("second message");
+
+    assert!(first.is_err(), "unexpected message: {first:?}");
+    let second = second.expect("second message should be well-formed");
+    assert_eq!(second.to_string(), "OPTIONS * RTSP/1.0\nCSeq: 2");
+    assert!(src.is_empty());
+}
+
+#[test]
+fn decode_skips_body_of_malformed_message() {
+    let mut codec = MessageCodec::default();
+    let mut src = buffer(
+        b"OPTIONS\r\nCSeq: 1\r\nContent-Length: 5\r\n\r\nhelloOPTIONS * RTSP/1.0\r\nCSeq: 2\r\n\r\n",
+    );
+
+    let first = codec.decode(&mut src).expect("decode should succeed").expect("first message");
+    let second = codec.decode(&mut src).expect("decode should succeed").expect("second message");
+
+    assert!(first.is_err(), "unexpected message: {first:?}");
+    let second = second.expect("second message should be well-formed");
+    assert_eq!(second.to_string(), "OPTIONS * RTSP/1.0\nCSeq: 2");
 }
 
 fn encode(message: Message) -> String {

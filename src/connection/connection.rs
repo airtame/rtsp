@@ -1,7 +1,8 @@
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 
 use crate::connection::{ConnectionCloseReason, ConnectionHandle};
-use crate::message::{MessageCodec, MessageError};
+use crate::message::{Message, MessageCodec, MessageError, Response, StatusCode, Version};
+use crate::router::Router;
 
 const READ_BUFFER_SIZE: usize = 4096;
 
@@ -10,6 +11,7 @@ pub(crate) struct Connection {
     peer_addr: std::net::SocketAddr,
     cancellation_token: tokio_util::sync::CancellationToken,
     idle_timeout: Option<std::time::Duration>,
+    router: Router,
 }
 
 impl Connection {
@@ -17,6 +19,7 @@ impl Connection {
         stream: tokio::net::TcpStream,
         peer_addr: std::net::SocketAddr,
         cancellation_token: tokio_util::sync::CancellationToken,
+        router: Router,
     ) -> (Self, ConnectionHandle) {
         let handle = ConnectionHandle::new(peer_addr, cancellation_token.clone());
         let framed_tcp_stream = tokio_util::codec::Framed::with_capacity(
@@ -25,7 +28,10 @@ impl Connection {
             READ_BUFFER_SIZE,
         );
 
-        (Self { framed_tcp_stream, peer_addr, cancellation_token, idle_timeout: None }, handle)
+        (
+            Self { framed_tcp_stream, peer_addr, cancellation_token, idle_timeout: None, router },
+            handle,
+        )
     }
 
     pub(crate) fn with_idle_timeout(mut self, timeout: std::time::Duration) -> Self {
@@ -56,19 +62,56 @@ impl Connection {
                 message = self.framed_tcp_stream.next() => {
                     match message {
                         None => return ConnectionCloseReason::ClosedByPeer,
-                        // NOTE(atokodi): Messages are only logged until request handling is implemented.
-                        Some(Ok(message)) => {
-                            log::debug!("[rtsp] message from {}:\n{message}", self.peer_addr);
+                        Some(Ok(decoded)) => {
                             if let Some(idle_timeout) = self.idle_timeout {
                                 idle_timer.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                             }
+
+                            match decoded {
+                                Ok(Message::Request(request)) => {
+                                    log::debug!("[rtsp] request from {}:\n{request}", self.peer_addr);
+
+                                    let response = self.router.route(&request);
+                                    log::debug!("[rtsp] response to {}:\n{response}", self.peer_addr);
+
+                                    if let Err(err) = self.framed_tcp_stream.send(Message::Response(response)).await {
+                                        return ConnectionCloseReason::Io(err);
+                                    }
+                                }
+                                Ok(Message::Response(response)) => {
+                                    log::debug!("[rtsp] response from {}:\n{response}", self.peer_addr);
+                                    // TODO(atokodi): Should notify the embedder about this new
+                                    // message so it can process it.
+                                }
+                                Err(malformed) => {
+                                    if let Err(err) = self.reject(&malformed.error, malformed.cseq.as_deref()).await {
+                                        return ConnectionCloseReason::Io(err);
+                                    }
+                                }
+                            }
                         }
                         Some(Err(MessageError::Io(err))) => return ConnectionCloseReason::Io(err),
-                        Some(Err(err)) => return ConnectionCloseReason::InvalidMessage(err),
+                        Some(Err(err)) => {
+                            if let Err(send_err) = self.reject(&err, None).await {
+                                return ConnectionCloseReason::Io(send_err);
+                            }
+                            return ConnectionCloseReason::InvalidMessage(err);
+                        }
                     }
                 }
             }
         }
+    }
+
+    async fn reject(&mut self, error: &MessageError, cseq: Option<&str>) -> std::io::Result<()> {
+        log::error!("[rtsp] rejecting message from {}: {error}", self.peer_addr);
+
+        let mut response = Response::new(Version::V1, StatusCode::BadRequest);
+        if let Some(cseq) = cseq {
+            response = response.with_cseq(cseq);
+        }
+
+        self.framed_tcp_stream.send(Message::Response(response)).await
     }
 }
 

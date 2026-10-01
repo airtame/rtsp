@@ -15,9 +15,9 @@ impl Message {
         let first_word =
             start_line.trim_ascii_start().split(|&byte| byte == b' ' || byte == b'\r').next();
         if first_word.is_some_and(|word| word.contains(&b'/')) {
-            Response::new(start_line, headers, body).map(Self::Response)
+            Response::parse(start_line, headers, body).map(Self::Response)
         } else {
-            Request::new(start_line, headers, body).map(Self::Request)
+            Request::parse(start_line, headers, body).map(Self::Request)
         }
     }
 

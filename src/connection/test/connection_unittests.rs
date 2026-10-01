@@ -1,9 +1,11 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
+use crate::message::{Request, Response, StatusCode, Version};
 
 const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const OPTIONS_REQUEST: &[u8] = b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+const NOT_FOUND_RESPONSE: &str = "RTSP/1.0 404 Not Found\r\nCSeq: 1\r\n\r\n";
 
 /// Fields left out of a `let TestConnection { .. }` pattern are dropped right away, so tests
 /// that need the client to stay connected bind it as `client: _client`.
@@ -15,6 +17,10 @@ struct TestConnection {
 }
 
 async fn connect() -> TestConnection {
+    connect_with_router(Router::new()).await
+}
+
+async fn connect_with_router(router: Router) -> TestConnection {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
         .expect("listener bind failed");
@@ -25,7 +31,8 @@ async fn connect() -> TestConnection {
     let (stream, peer_addr) = accepted.expect("accept failed");
 
     let cancellation_token = tokio_util::sync::CancellationToken::new();
-    let (connection, handle) = Connection::new(stream, peer_addr, cancellation_token.clone());
+    let (connection, handle) =
+        Connection::new(stream, peer_addr, cancellation_token.clone(), router);
 
     TestConnection { client, connection, handle, cancellation_token }
 }
@@ -131,6 +138,7 @@ async fn run_resets_idle_timeout_when_client_sends_messages() {
         for _ in 0..8 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             client.write_all(OPTIONS_REQUEST).await.expect("client write failed");
+            read_response(&mut client, NOT_FOUND_RESPONSE.len()).await;
         }
         drop(client);
     });
@@ -142,7 +150,20 @@ async fn run_resets_idle_timeout_when_client_sends_messages() {
 async fn run_keeps_connection_open_after_valid_message() {
     let TestConnection { mut client, connection, .. } = connect().await;
 
-    client.write_all(OPTIONS_REQUEST).await.expect("client write failed");
+    let (reason, _) = tokio::join!(run_until_closed(connection), async {
+        client.write_all(OPTIONS_REQUEST).await.expect("client write failed");
+        read_response(&mut client, NOT_FOUND_RESPONSE.len()).await;
+        drop(client);
+    });
+
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
+async fn run_keeps_connection_open_after_valid_response() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+
+    client.write_all(b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n").await.expect("client write failed");
     drop(client);
 
     let reason = run_until_closed(connection).await;
@@ -150,8 +171,31 @@ async fn run_keeps_connection_open_after_valid_message() {
 }
 
 #[tokio::test]
+async fn run_answers_malformed_start_line_with_bad_request_and_stays_open() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+    let bad_request = "RTSP/1.0 400 Bad Request\r\nCSeq: 1\r\n\r\n";
+    let not_found = "RTSP/1.0 404 Not Found\r\nCSeq: 2\r\n\r\n";
+
+    let (reason, responses) = tokio::join!(run_until_closed(connection), async {
+        client.write_all(b"OPTIONS\r\nCSeq: 1\r\n\r\n").await.expect("client write failed");
+        let first = read_response(&mut client, bad_request.len()).await;
+        client
+            .write_all(b"OPTIONS * RTSP/1.0\r\nCSeq: 2\r\n\r\n")
+            .await
+            .expect("client write failed");
+        let second = read_response(&mut client, not_found.len()).await;
+        drop(client);
+        (first, second)
+    });
+
+    assert_eq!(responses, (bad_request.to_owned(), not_found.to_owned()));
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
 async fn run_returns_invalid_message_when_client_sends_malformed_header() {
     let TestConnection { mut client, connection, .. } = connect().await;
+    let bad_request = "RTSP/1.0 400 Bad Request\r\n\r\n";
 
     client.write_all(b"OPTIONS * RTSP/1.0\r\nCSeq 1\r\n\r\n").await.expect("client write failed");
 
@@ -160,4 +204,78 @@ async fn run_returns_invalid_message_when_client_sends_malformed_header() {
         matches!(&reason, ConnectionCloseReason::InvalidMessage(MessageError::InvalidHeader(line)) if line == "CSeq 1"),
         "unexpected reason: {reason:?}"
     );
+    assert_eq!(read_response(&mut client, bad_request.len()).await, bad_request);
+}
+
+async fn read_response(client: &mut tokio::net::TcpStream, length: usize) -> String {
+    let mut received = vec![0; length];
+    tokio::time::timeout(TEST_TIMEOUT, client.read_exact(&mut received))
+        .await
+        .expect("no response received")
+        .expect("client read failed");
+
+    String::from_utf8(received).expect("response should be UTF-8")
+}
+
+fn router_with_stream() -> Router {
+    let router = Router::new();
+    router.register("/stream1", |_: &Request| {
+        Response::new(Version::V1, StatusCode::Ok).with_body("v=0\r\n")
+    });
+
+    router
+}
+
+#[tokio::test]
+async fn run_answers_request_with_not_found_without_routes() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+    let expected = "RTSP/1.0 404 Not Found\r\nCSeq: 1\r\n\r\n";
+
+    let (reason, response) = tokio::join!(run_until_closed(connection), async {
+        client.write_all(OPTIONS_REQUEST).await.expect("client write failed");
+        let response = read_response(&mut client, expected.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, expected);
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
+async fn run_answers_request_with_response_of_registered_handler() {
+    let TestConnection { mut client, connection, .. } =
+        connect_with_router(router_with_stream()).await;
+    let expected = "RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Length: 5\r\n\r\nv=0\r\n";
+
+    let (_, response) = tokio::join!(run_until_closed(connection), async {
+        client
+            .write_all(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0\r\nCSeq: 2\r\n\r\n")
+            .await
+            .expect("client write failed");
+        let response = read_response(&mut client, expected.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, expected);
+}
+
+#[tokio::test]
+async fn run_answers_pipelined_requests_in_order() {
+    let TestConnection { mut client, connection, .. } =
+        connect_with_router(router_with_stream()).await;
+    let requests: &[u8] = b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n\
+                            DESCRIBE rtsp://example.com/stream1 RTSP/1.0\r\nCSeq: 2\r\n\r\n";
+    let expected = "RTSP/1.0 404 Not Found\r\nCSeq: 1\r\n\r\n\
+                    RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Length: 5\r\n\r\nv=0\r\n";
+
+    let (_, response) = tokio::join!(run_until_closed(connection), async {
+        client.write_all(requests).await.expect("client write failed");
+        let response = read_response(&mut client, expected.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, expected);
 }

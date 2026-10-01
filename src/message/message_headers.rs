@@ -22,6 +22,21 @@ impl MessageHeaders {
         self.fields.is_empty()
     }
 
+    pub(crate) fn append(&mut self, name: String, value: String) {
+        // TODO(atokodi): Not sure about these asserts. Should return a Result instead?
+        assert!(
+            !name.is_empty() && !name.contains([':', '\r', '\n']),
+            "invalid header name: {name:?}"
+        );
+        assert!(!value.contains(['\r', '\n']), "invalid header value: {value:?}");
+
+        self.fields.push((name, value));
+    }
+
+    pub(crate) fn remove(&mut self, name: &str) {
+        self.fields.retain(|(field_name, _)| !field_name.eq_ignore_ascii_case(name));
+    }
+
     pub(crate) fn encode(&self, body_length: usize, dst: &mut tokio_util::bytes::BytesMut) {
         use std::fmt::Write as _;
 

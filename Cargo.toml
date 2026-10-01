@@ -8,6 +8,9 @@ readme = "README.md"
 keywords = ["rtsp", "streaming", "tokio", "async", "protocol"]
 categories = ["network-programming", "multimedia", "asynchronous"]
 
+[lints.rust]
+unreachable_pub = "warn"
+
 [lints.clippy]
 module_inception = "allow"
 

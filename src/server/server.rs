@@ -1,4 +1,5 @@
 use crate::connection::{Connection, ConnectionCloseReason};
+use crate::server::ServerDelegate;
 
 const MAX_CONNECTION_BACKLOG: u32 = 1024;
 
@@ -34,7 +35,7 @@ impl Server {
         self
     }
 
-    pub async fn run(&self) {
+    pub async fn run<D: ServerDelegate>(&self, delegate: &D) {
         log::debug!("[rtsp] server run loop started");
 
         let mut connection_tasks = tokio::task::JoinSet::new();
@@ -48,19 +49,19 @@ impl Server {
                 accepted = self.listener.accept() => {
                     match accepted {
                         Ok((stream, addr)) => {
-                            self.accept_connection(&mut connection_tasks, stream, addr)
+                            self.accept_connection(&mut connection_tasks, stream, addr, delegate)
                         }
                         Err(err) => log::error!("[rtsp] server failed to accept connection: {err}"),
                     }
                 }
                 Some(closed_connection) = connection_tasks.join_next() => {
-                    Self::on_connection_closed(closed_connection)
+                    Self::on_connection_closed(closed_connection, delegate)
                 }
             }
         }
 
         while let Some(closed_connection) = connection_tasks.join_next().await {
-            Self::on_connection_closed(closed_connection);
+            Self::on_connection_closed(closed_connection, delegate);
         }
 
         log::debug!("[rtsp] server run loop stopped");
@@ -72,30 +73,38 @@ impl Server {
         self.cancellation_token.cancel();
     }
 
-    fn accept_connection(
+    fn accept_connection<D: ServerDelegate>(
         &self,
         connection_tasks: &mut tokio::task::JoinSet<(std::net::SocketAddr, ConnectionCloseReason)>,
         stream: tokio::net::TcpStream,
         addr: std::net::SocketAddr,
+        delegate: &D,
     ) {
         log::debug!("[rtsp] new connection from {addr}");
 
-        let mut connection = Connection::new(stream, addr, self.cancellation_token.child_token());
+        let (mut connection, connection_handle) =
+            Connection::new(stream, addr, self.cancellation_token.child_token());
         if let Some(idle_timeout) = self.connection_idle_timeout {
             connection = connection.with_idle_timeout(idle_timeout);
         }
 
+        delegate.on_new_connection(connection_handle);
+
         connection_tasks.spawn(async move { (connection.peer_addr(), connection.run().await) });
     }
 
-    fn on_connection_closed(
+    fn on_connection_closed<D: ServerDelegate>(
         closed_connection: Result<
             (std::net::SocketAddr, ConnectionCloseReason),
             tokio::task::JoinError,
         >,
+        delegate: &D,
     ) {
         match closed_connection {
-            Ok((addr, reason)) => log::debug!("[rtsp] connection from {addr} closed: {reason}"),
+            Ok((addr, reason)) => {
+                log::debug!("[rtsp] connection from {addr} closed: {reason}");
+                delegate.on_connection_closed(addr, reason);
+            }
             Err(err) => log::error!("[rtsp] connection task failed: {err}"),
         }
     }

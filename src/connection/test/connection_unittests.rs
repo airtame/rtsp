@@ -1,8 +1,9 @@
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
 
 const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const OPTIONS_REQUEST: &[u8] = b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
 
 /// Fields left out of a `let TestConnection { .. }` pattern are dropped right away, so tests
 /// that need the client to stay connected bind it as `client: _client`.
@@ -13,7 +14,6 @@ struct TestConnection {
     cancellation_token: tokio_util::sync::CancellationToken,
 }
 
-/// Returns a connected client stream and a `Connection` wrapping the accepted server side.
 async fn connect() -> TestConnection {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
@@ -122,18 +122,42 @@ async fn run_returns_idle_timeout_when_client_sends_nothing() {
 }
 
 #[tokio::test]
-async fn run_resets_idle_timeout_when_client_sends_data() {
+async fn run_resets_idle_timeout_when_client_sends_messages() {
     let TestConnection { mut client, connection, .. } = connect().await;
     let connection = connection.with_idle_timeout(std::time::Duration::from_millis(500));
 
-    // Keeps writing for longer than the idle timeout, with gaps well below it.
+    // Keeps sending messages for longer than the idle timeout, with gaps well below it.
     let (reason, _) = tokio::join!(run_until_closed(connection), async {
         for _ in 0..8 {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            client.write_all(b"x").await.expect("client write failed");
+            client.write_all(OPTIONS_REQUEST).await.expect("client write failed");
         }
         drop(client);
     });
 
     assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
+async fn run_keeps_connection_open_after_valid_message() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+
+    client.write_all(OPTIONS_REQUEST).await.expect("client write failed");
+    drop(client);
+
+    let reason = run_until_closed(connection).await;
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
+async fn run_returns_invalid_message_when_client_sends_malformed_header() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+
+    client.write_all(b"OPTIONS * RTSP/1.0\r\nCSeq 1\r\n\r\n").await.expect("client write failed");
+
+    let reason = run_until_closed(connection).await;
+    assert!(
+        matches!(&reason, ConnectionCloseReason::InvalidMessage(MessageError::InvalidHeader(line)) if line == "CSeq 1"),
+        "unexpected reason: {reason:?}"
+    );
 }

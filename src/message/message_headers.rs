@@ -25,18 +25,18 @@ impl MessageHeaders {
     pub(crate) fn encode(&self, body_length: usize, dst: &mut tokio_util::bytes::BytesMut) {
         use std::fmt::Write as _;
 
-        // Content-Length always matches the body, keeping its position but dropping duplicates.
         let mut wrote_content_length = false;
         for (name, value) in &self.fields {
             if !name.eq_ignore_ascii_case(CONTENT_LENGTH) {
-                let _ = write!(dst, "{name}: {value}{CRLF}");
+                write!(dst, "{name}: {value}{CRLF}").expect("writing to BytesMut can't fail");
             } else if !wrote_content_length {
-                let _ = write!(dst, "{name}: {body_length}{CRLF}");
+                write!(dst, "{name}: {body_length}{CRLF}").expect("writing to BytesMut can't fail");
                 wrote_content_length = true;
             }
         }
         if !wrote_content_length && body_length > 0 {
-            let _ = write!(dst, "{CONTENT_LENGTH}: {body_length}{CRLF}");
+            write!(dst, "{CONTENT_LENGTH}: {body_length}{CRLF}")
+                .expect("writing to BytesMut can't fail");
         }
     }
 }

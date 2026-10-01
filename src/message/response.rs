@@ -62,7 +62,8 @@ impl Response {
     pub(crate) fn encode(&self, dst: &mut tokio_util::bytes::BytesMut) {
         use std::fmt::Write as _;
 
-        let _ = write!(dst, "{} {:03} {}\r\n", self.version, self.status_code, self.reason_phrase);
+        write!(dst, "{} {:03} {}\r\n", self.version, self.status_code, self.reason_phrase)
+            .expect("writing to BytesMut can't fail");
 
         self.headers.encode(self.body.len(), dst);
         dst.extend_from_slice(b"\r\n");

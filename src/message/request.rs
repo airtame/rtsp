@@ -67,7 +67,8 @@ impl Request {
     pub(crate) fn encode(&self, dst: &mut tokio_util::bytes::BytesMut) {
         use std::fmt::Write as _;
 
-        let _ = write!(dst, "{} {} {}\r\n", self.method, self.uri, self.version);
+        write!(dst, "{} {} {}\r\n", self.method, self.uri, self.version)
+            .expect("writing to BytesMut can't fail");
 
         self.headers.encode(self.body.len(), dst);
         dst.extend_from_slice(b"\r\n");

@@ -1,13 +1,22 @@
 use super::*;
 
+fn parse(
+    start_line: &[u8],
+    header_lines: &str,
+    parsing_mode: ParsingMode,
+) -> Result<Request, MessageError> {
+    let headers =
+        MessageHeaders::try_from(header_lines.as_bytes()).expect("headers should be valid");
+
+    Request::parse(start_line, headers, tokio_util::bytes::Bytes::new(), parsing_mode)
+}
+
 fn request(start_line: &[u8]) -> Request {
-    Request::parse(start_line, MessageHeaders::default(), tokio_util::bytes::Bytes::new())
-        .expect("request line should be valid")
+    parse(start_line, "", ParsingMode::Lenient).expect("request line should be valid")
 }
 
 fn request_err(start_line: &[u8]) -> MessageError {
-    Request::parse(start_line, MessageHeaders::default(), tokio_util::bytes::Bytes::new())
-        .expect_err("request line should be invalid")
+    parse(start_line, "", ParsingMode::Lenient).expect_err("request line should be invalid")
 }
 
 fn assert_invalid_request_line(start_line: &str) {
@@ -58,7 +67,7 @@ fn parse_reads_extension_method() {
 }
 
 #[test]
-fn parse_reads_other_protocol_version() {
+fn parse_reads_other_protocol_version_in_lenient_mode() {
     let request = request(b"GET /stream HTTP/1.1");
 
     assert_eq!(request.method, RequestMethod::Extension("GET".to_owned()));
@@ -89,8 +98,13 @@ fn parse_keeps_headers_and_body() {
     let headers = MessageHeaders::try_from(b"CSeq: 1".as_slice()).expect("headers should be valid");
     let body = tokio_util::bytes::Bytes::from_static(b"v=0\r\n");
 
-    let request = Request::parse(b"ANNOUNCE rtsp://example.com/stream RTSP/1.0", headers, body)
-        .expect("request line should be valid");
+    let request = Request::parse(
+        b"ANNOUNCE rtsp://example.com/stream RTSP/1.0",
+        headers,
+        body,
+        ParsingMode::Strict,
+    )
+    .expect("request line should be valid");
 
     assert_eq!(request.headers.get("CSeq"), Some("1"));
     assert_eq!(&request.body[..], b"v=0\r\n");
@@ -137,6 +151,53 @@ fn parse_rejects_invalid_utf8() {
 
     assert!(
         matches!(&err, MessageError::InvalidEncoding(text) if text == "OPTIONS \u{fffd} RTSP/1.0"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn parse_accepts_rtsp_request_with_cseq_in_strict_mode() {
+    let request = parse(b"OPTIONS * RTSP/1.0", "CSeq: 1", ParsingMode::Strict)
+        .expect("request should be valid");
+
+    assert_eq!(request.version, Version::V1);
+    assert_eq!(request.headers.get("CSeq"), Some("1"));
+}
+
+#[test]
+fn parse_finds_cseq_case_insensitively_in_strict_mode() {
+    let request = parse(b"OPTIONS * RTSP/1.0", "cseq: 1", ParsingMode::Strict)
+        .expect("request should be valid");
+
+    assert_eq!(request.headers.get("CSeq"), Some("1"));
+}
+
+#[test]
+fn parse_rejects_missing_cseq_in_strict_mode() {
+    let err = parse(b"OPTIONS * RTSP/1.0", "Session: 12345678", ParsingMode::Strict)
+        .expect_err("request should be invalid");
+
+    assert!(
+        matches!(&err, MessageError::MissingHeader(name) if name == "CSeq"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn parse_accepts_missing_cseq_in_lenient_mode() {
+    let request =
+        parse(b"OPTIONS * RTSP/1.0", "", ParsingMode::Lenient).expect("request should be valid");
+
+    assert_eq!(request.headers.get("CSeq"), None);
+}
+
+#[test]
+fn parse_rejects_other_protocol_version_in_strict_mode() {
+    let err = parse(b"GET /stream HTTP/1.1", "CSeq: 1", ParsingMode::Strict)
+        .expect_err("request should be invalid");
+
+    assert!(
+        matches!(&err, MessageError::InvalidRequestLine(line) if line == "GET /stream HTTP/1.1"),
         "unexpected error: {err:?}"
     );
 }

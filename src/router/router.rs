@@ -37,7 +37,6 @@ impl Router {
             None => Response::new(request.version().clone(), StatusCode::NotFound),
         };
 
-        // TODO(atokodi): check permissive. HTTP requests don't have CSeq.
         match request.headers().get(CSEQ) {
             Some(cseq) => response.with_cseq(cseq),
             None => response,

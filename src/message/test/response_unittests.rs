@@ -1,13 +1,22 @@
 use super::*;
 
+fn parse(
+    start_line: &[u8],
+    header_lines: &str,
+    parsing_mode: ParsingMode,
+) -> Result<Response, MessageError> {
+    let headers =
+        MessageHeaders::try_from(header_lines.as_bytes()).expect("headers should be valid");
+
+    Response::parse(start_line, headers, tokio_util::bytes::Bytes::new(), parsing_mode)
+}
+
 fn response(start_line: &[u8]) -> Response {
-    Response::parse(start_line, MessageHeaders::default(), tokio_util::bytes::Bytes::new())
-        .expect("status line should be valid")
+    parse(start_line, "", ParsingMode::Lenient).expect("status line should be valid")
 }
 
 fn response_err(start_line: &[u8]) -> MessageError {
-    Response::parse(start_line, MessageHeaders::default(), tokio_util::bytes::Bytes::new())
-        .expect_err("status line should be invalid")
+    parse(start_line, "", ParsingMode::Lenient).expect_err("status line should be invalid")
 }
 
 fn assert_invalid_status_line(start_line: &str) {
@@ -62,7 +71,7 @@ fn parse_accepts_lowercase_version() {
 }
 
 #[test]
-fn parse_reads_other_protocol_version() {
+fn parse_reads_other_protocol_version_in_lenient_mode() {
     let response = response(b"HTTP/1.1 200 OK");
 
     assert_eq!(response.version, Version::Other("HTTP/1.1".to_owned()));
@@ -73,8 +82,8 @@ fn parse_keeps_headers_and_body() {
     let headers = MessageHeaders::try_from(b"CSeq: 2".as_slice()).expect("headers should be valid");
     let body = tokio_util::bytes::Bytes::from_static(b"hello");
 
-    let response =
-        Response::parse(b"RTSP/1.0 200 OK", headers, body).expect("status line should be valid");
+    let response = Response::parse(b"RTSP/1.0 200 OK", headers, body, ParsingMode::Strict)
+        .expect("status line should be valid");
 
     assert_eq!(response.headers.get("CSeq"), Some("2"));
     assert_eq!(&response.body[..], b"hello");
@@ -119,6 +128,25 @@ fn parse_rejects_invalid_utf8() {
         matches!(&err, MessageError::InvalidEncoding(text) if text == "RTSP/1.0 200 \u{fffd}"),
         "unexpected error: {err:?}"
     );
+}
+
+#[test]
+fn parse_rejects_other_protocol_version_in_strict_mode() {
+    let err = parse(b"HTTP/1.1 200 OK", "CSeq: 1", ParsingMode::Strict)
+        .expect_err("status line should be invalid");
+
+    assert!(
+        matches!(&err, MessageError::InvalidStatusLine(line) if line == "HTTP/1.1 200 OK"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn parse_accepts_missing_cseq_in_strict_mode() {
+    let response =
+        parse(b"RTSP/1.0 200 OK", "", ParsingMode::Strict).expect("status line should be valid");
+
+    assert_eq!(response.headers.get("CSeq"), None);
 }
 
 fn encode(response: &Response) -> String {
@@ -275,6 +303,7 @@ fn created_response_parses_back_to_same_fields() {
         status_line.as_bytes(),
         headers,
         tokio_util::bytes::Bytes::copy_from_slice(body.as_bytes()),
+        ParsingMode::Strict,
     )
     .expect("encoded status line should parse");
 

@@ -1,4 +1,6 @@
-use crate::message::{MessageError, MessageHeaders, RequestMethod, Version};
+use crate::message::{MessageError, MessageHeaders, ParsingMode, RequestMethod, Version};
+
+const CSEQ: &str = "CSeq";
 
 #[derive(Debug)]
 pub struct Request {
@@ -16,6 +18,7 @@ impl Request {
         start_line: &[u8],
         headers: MessageHeaders,
         body: tokio_util::bytes::Bytes,
+        parsing_mode: ParsingMode,
     ) -> Result<Self, MessageError> {
         let start_line = std::str::from_utf8(start_line).map_err(|_| {
             MessageError::InvalidEncoding(String::from_utf8_lossy(start_line).into_owned())
@@ -32,6 +35,12 @@ impl Request {
         let Ok(method) = method.parse::<RequestMethod>();
         let (path, query) = Self::parse_uri(uri);
         let version = version.parse::<Version>().map_err(|_| invalid_request_line())?;
+        if parsing_mode == ParsingMode::Strict && matches!(version, Version::Other(_)) {
+            return Err(invalid_request_line());
+        }
+        if parsing_mode == ParsingMode::Strict && headers.get(CSEQ).is_none() {
+            return Err(MessageError::MissingHeader(CSEQ.to_owned()));
+        }
 
         Ok(Self { method, uri: uri.to_owned(), path, query, version, headers, body })
     }

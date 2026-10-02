@@ -1,7 +1,7 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
-use crate::message::{Request, Response, StatusCode, Version};
+use crate::message::{ParsingMode, Request, Response, StatusCode, Version};
 
 const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const OPTIONS_REQUEST: &[u8] = b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
@@ -17,10 +17,18 @@ struct TestConnection {
 }
 
 async fn connect() -> TestConnection {
-    connect_with_router(Router::new()).await
+    connect_with(Router::new(), ConnectionOptions::default()).await
 }
 
 async fn connect_with_router(router: Router) -> TestConnection {
+    connect_with(router, ConnectionOptions::default()).await
+}
+
+async fn connect_with_options(options: ConnectionOptions) -> TestConnection {
+    connect_with(Router::new(), options).await
+}
+
+async fn connect_with(router: Router, options: ConnectionOptions) -> TestConnection {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
         .expect("listener bind failed");
@@ -32,7 +40,7 @@ async fn connect_with_router(router: Router) -> TestConnection {
 
     let cancellation_token = tokio_util::sync::CancellationToken::new();
     let (connection, handle) =
-        Connection::new(stream, peer_addr, cancellation_token.clone(), router);
+        Connection::new(stream, peer_addr, cancellation_token.clone(), router, options);
 
     TestConnection { client, connection, handle, cancellation_token }
 }
@@ -118,11 +126,12 @@ async fn run_returns_io_error_when_connection_is_reset() {
 
 #[tokio::test]
 async fn run_returns_idle_timeout_when_client_sends_nothing() {
-    let TestConnection { client: _client, connection, .. } = connect().await;
     let idle_timeout = std::time::Duration::from_millis(100);
+    let TestConnection { client: _client, connection, .. } =
+        connect_with_options(ConnectionOptions::new().with_idle_timeout(idle_timeout)).await;
 
     let started = std::time::Instant::now();
-    let reason = run_until_closed(connection.with_idle_timeout(idle_timeout)).await;
+    let reason = run_until_closed(connection).await;
 
     assert!(matches!(reason, ConnectionCloseReason::IdleTimeout), "unexpected reason: {reason:?}");
     assert!(started.elapsed() >= idle_timeout, "closed before the idle timeout elapsed");
@@ -130,8 +139,9 @@ async fn run_returns_idle_timeout_when_client_sends_nothing() {
 
 #[tokio::test]
 async fn run_resets_idle_timeout_when_client_sends_messages() {
-    let TestConnection { mut client, connection, .. } = connect().await;
-    let connection = connection.with_idle_timeout(std::time::Duration::from_millis(500));
+    let idle_timeout = std::time::Duration::from_millis(500);
+    let TestConnection { mut client, connection, .. } =
+        connect_with_options(ConnectionOptions::new().with_idle_timeout(idle_timeout)).await;
 
     // Keeps sending messages for longer than the idle timeout, with gaps well below it.
     let (reason, _) = tokio::join!(run_until_closed(connection), async {
@@ -205,6 +215,75 @@ async fn run_returns_invalid_message_when_client_sends_malformed_header() {
         "unexpected reason: {reason:?}"
     );
     assert_eq!(read_response(&mut client, bad_request.len()).await, bad_request);
+}
+
+#[tokio::test]
+async fn run_answers_request_without_cseq_with_bad_request_in_strict_mode() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+    let bad_request = "RTSP/1.0 400 Bad Request\r\n\r\n";
+
+    let (reason, response) = tokio::join!(run_until_closed(connection), async {
+        client.write_all(b"OPTIONS * RTSP/1.0\r\n\r\n").await.expect("client write failed");
+        let response = read_response(&mut client, bad_request.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, bad_request);
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
+async fn run_answers_other_protocol_version_with_bad_request_in_strict_mode() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+    let bad_request = "RTSP/1.0 400 Bad Request\r\nCSeq: 1\r\n\r\n";
+
+    let (reason, response) = tokio::join!(run_until_closed(connection), async {
+        client
+            .write_all(b"GET /health HTTP/1.1\r\nCSeq: 1\r\n\r\n")
+            .await
+            .expect("client write failed");
+        let response = read_response(&mut client, bad_request.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, bad_request);
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
+async fn run_routes_request_without_cseq_in_lenient_mode() {
+    let options = ConnectionOptions::new().with_parsing_mode(ParsingMode::Lenient);
+    let TestConnection { mut client, connection, .. } = connect_with_options(options).await;
+    let not_found = "RTSP/1.0 404 Not Found\r\n\r\n";
+
+    let (reason, response) = tokio::join!(run_until_closed(connection), async {
+        client.write_all(b"OPTIONS * RTSP/1.0\r\n\r\n").await.expect("client write failed");
+        let response = read_response(&mut client, not_found.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, not_found);
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
+async fn run_routes_other_protocol_version_in_lenient_mode() {
+    let options = ConnectionOptions::new().with_parsing_mode(ParsingMode::Lenient);
+    let TestConnection { mut client, connection, .. } = connect_with_options(options).await;
+    let not_found = "HTTP/1.1 404 Not Found\r\n\r\n";
+
+    let (reason, response) = tokio::join!(run_until_closed(connection), async {
+        client.write_all(b"GET /health HTTP/1.1\r\n\r\n").await.expect("client write failed");
+        let response = read_response(&mut client, not_found.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, not_found);
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
 }
 
 async fn read_response(client: &mut tokio::net::TcpStream, length: usize) -> String {

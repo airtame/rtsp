@@ -3,7 +3,6 @@
 pub enum Version {
     V1,
     V2,
-    // TODO(atokodi): Only in permissive mode.
     Other(String),
 }
 

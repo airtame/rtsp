@@ -43,6 +43,13 @@ fn display_invalid_status_line_quotes_line() {
 }
 
 #[test]
+fn display_missing_header_quotes_name() {
+    let err = MessageError::MissingHeader("CSeq".to_owned());
+
+    assert_eq!(err.to_string(), r#"missing header: "CSeq""#);
+}
+
+#[test]
 fn display_escapes_control_characters() {
     let err = MessageError::InvalidHeader("a\nb\x1b[31m".to_owned());
 

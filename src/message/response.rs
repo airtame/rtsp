@@ -1,4 +1,4 @@
-use crate::message::{MessageError, MessageHeaders, StatusCode, Version};
+use crate::message::{MessageError, MessageHeaders, ParsingMode, StatusCode, Version};
 
 const CSEQ: &str = "CSeq";
 
@@ -55,6 +55,7 @@ impl Response {
         start_line: &[u8],
         headers: MessageHeaders,
         body: tokio_util::bytes::Bytes,
+        parsing_mode: ParsingMode,
     ) -> Result<Self, MessageError> {
         let start_line = std::str::from_utf8(start_line).map_err(|_| {
             MessageError::InvalidEncoding(String::from_utf8_lossy(start_line).into_owned())
@@ -66,6 +67,9 @@ impl Response {
         let (status_code, reason_phrase) = rest.split_once(' ').unwrap_or((rest, ""));
 
         let version = version.parse::<Version>().map_err(|_| invalid_status_line())?;
+        if parsing_mode == ParsingMode::Strict && matches!(version, Version::Other(_)) {
+            return Err(invalid_status_line());
+        }
         if status_code.len() != 3 || !status_code.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(invalid_status_line());
         }
@@ -100,6 +104,9 @@ impl Response {
         &self.body
     }
 
+    // TODO(atokodi): Always write Content-Length (0 for an empty body), except for 1xx, 204 and
+    // 304 responses. Without it an HTTP client in lenient mode reads the body until the
+    // connection closes, so it waits for the idle timeout.
     pub(crate) fn encode(&self, dst: &mut tokio_util::bytes::BytesMut) {
         use std::fmt::Write as _;
 

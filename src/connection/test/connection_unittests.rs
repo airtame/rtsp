@@ -66,6 +66,23 @@ async fn new_returns_handle_for_same_peer() {
 }
 
 #[tokio::test]
+async fn debug_shows_peer_address_options_and_router() {
+    let options = ConnectionOptions::new().with_idle_timeout(std::time::Duration::from_secs(60));
+    let TestConnection { client, connection, .. } =
+        connect_with(router_with_stream(), options).await;
+
+    assert_eq!(
+        format!("{connection:?}"),
+        format!(
+            "Connection {{ peer_addr: {}, options: ConnectionOptions {{ idle_timeout: Some(60s), \
+             parsing_mode: Strict, activity_hook: false }}, \
+             router: Router {{ paths: [\"/stream1\"] }}, .. }}",
+            client.local_addr().unwrap()
+        )
+    );
+}
+
+#[tokio::test]
 async fn run_returns_closed_by_peer_when_client_disconnects() {
     let TestConnection { client, connection, .. } = connect().await;
 
@@ -154,6 +171,62 @@ async fn run_resets_idle_timeout_when_client_sends_messages() {
     });
 
     assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+type ActivityCalls = std::sync::Arc<std::sync::Mutex<Vec<std::net::SocketAddr>>>;
+
+fn options_recording_activity(calls: &ActivityCalls) -> ConnectionOptions {
+    let calls = calls.clone();
+    ConnectionOptions::new()
+        .with_activity_hook(move |peer_addr| calls.lock().unwrap().push(peer_addr))
+}
+
+#[tokio::test]
+async fn run_calls_activity_hook_with_peer_address_for_each_message() {
+    let calls = ActivityCalls::default();
+    let TestConnection { mut client, connection, .. } =
+        connect_with_options(options_recording_activity(&calls)).await;
+    let client_addr = client.local_addr().unwrap();
+
+    tokio::join!(run_until_closed(connection), async {
+        for _ in 0..2 {
+            client.write_all(OPTIONS_REQUEST).await.expect("client write failed");
+            read_response(&mut client, NOT_FOUND_RESPONSE.len()).await;
+        }
+        drop(client);
+    });
+
+    assert_eq!(*calls.lock().unwrap(), vec![client_addr, client_addr]);
+}
+
+#[tokio::test]
+async fn run_calls_activity_hook_for_malformed_message() {
+    let calls = ActivityCalls::default();
+    let TestConnection { mut client, connection, .. } =
+        connect_with_options(options_recording_activity(&calls)).await;
+    let bad_request = "RTSP/1.0 400 Bad Request\r\nCSeq: 1\r\n\r\n";
+
+    tokio::join!(run_until_closed(connection), async {
+        client.write_all(b"OPTIONS\r\nCSeq: 1\r\n\r\n").await.expect("client write failed");
+        read_response(&mut client, bad_request.len()).await;
+        drop(client);
+    });
+
+    assert_eq!(calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn run_does_not_call_activity_hook_for_incomplete_message() {
+    let calls = ActivityCalls::default();
+    let options =
+        options_recording_activity(&calls).with_idle_timeout(std::time::Duration::from_millis(100));
+    let TestConnection { mut client, connection, .. } = connect_with_options(options).await;
+
+    client.write_all(b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n").await.expect("client write failed");
+    let reason = run_until_closed(connection).await;
+
+    assert!(matches!(reason, ConnectionCloseReason::IdleTimeout), "unexpected reason: {reason:?}");
+    assert!(calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

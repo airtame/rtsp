@@ -2,6 +2,7 @@ use tokio::io::AsyncReadExt;
 
 use super::*;
 use crate::connection::ConnectionHandle;
+use crate::message::{Request, Response, StatusCode, Version};
 
 const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -280,4 +281,37 @@ async fn run_notifies_delegate_about_new_and_closed_connections() {
         "unexpected reason: {:?}",
         closed_connections[0].1
     );
+}
+
+fn respond_ok(_: &Request) -> Response {
+    Response::new(Version::V1, StatusCode::Ok)
+}
+
+#[tokio::test]
+async fn bind_starts_with_empty_router() {
+    let server = Server::bind(localhost_v4()).expect("bind failed");
+
+    assert_eq!(format!("{:?}", server.router), "Router { paths: [] }");
+}
+
+#[tokio::test]
+async fn with_router_uses_given_router() {
+    let router = Router::new();
+    router.register("/stream1", respond_ok);
+
+    let server = Server::bind(localhost_v4()).expect("bind failed").with_router(router);
+
+    assert!(server.router.get("/stream1").is_some());
+}
+
+#[tokio::test]
+async fn with_router_sees_routes_registered_afterwards() {
+    let router = Router::new();
+    let server = Server::bind(localhost_v4()).expect("bind failed").with_router(router.clone());
+
+    router.register("/stream1", respond_ok);
+    router.register("/stream2", respond_ok);
+    router.unregister("/stream1");
+
+    assert_eq!(format!("{:?}", server.router), r#"Router { paths: ["/stream2"] }"#);
 }

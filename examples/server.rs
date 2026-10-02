@@ -14,6 +14,30 @@
 
 const DEFAULT_ADDR: &str = "127.0.0.1:8554";
 const DEFAULT_CONNECTION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const STREAM_PATH: &str = "/stream1";
+const HEALTH_PATH: &str = "/health";
+const STREAM_METHODS: &str = "OPTIONS, DESCRIBE";
+const STREAM_SDP: &str = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=Example\r\nt=0 0\r\n";
+
+struct ExampleStream {
+    sdp: String,
+}
+
+impl rtsp::RequestHandler for ExampleStream {
+    fn handle(&self, request: &rtsp::Request) -> rtsp::Response {
+        let version = request.version().clone();
+
+        match request.method() {
+            rtsp::RequestMethod::Options => rtsp::Response::new(version, rtsp::StatusCode::Ok)
+                .with_header("Public", STREAM_METHODS),
+            rtsp::RequestMethod::Describe => rtsp::Response::new(version, rtsp::StatusCode::Ok)
+                .with_header("Content-Type", "application/sdp")
+                .with_body(self.sdp.clone()),
+            _ => rtsp::Response::new(version, rtsp::StatusCode::MethodNotAllowed)
+                .with_header("Allow", STREAM_METHODS),
+        }
+    }
+}
 
 struct PrintingDelegate;
 
@@ -39,8 +63,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr: std::net::SocketAddr =
         std::env::args().nth(1).as_deref().unwrap_or(DEFAULT_ADDR).parse()?;
 
+    let router = rtsp::Router::new();
+    router.register(STREAM_PATH, ExampleStream { sdp: STREAM_SDP.to_owned() });
+    router.register(HEALTH_PATH, |request: &rtsp::Request| {
+        rtsp::Response::new(request.version().clone(), rtsp::StatusCode::Ok)
+    });
+
     let server = std::sync::Arc::new(
-        rtsp::Server::bind(addr)?.with_connection_idle_timeout(DEFAULT_CONNECTION_IDLE_TIMEOUT),
+        rtsp::Server::bind(addr)?
+            .with_connection_idle_timeout(DEFAULT_CONNECTION_IDLE_TIMEOUT)
+            .with_router(router),
     );
     println!("RTSP server listening on rtsp://{addr}, press Ctrl+C to stop");
 

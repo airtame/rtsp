@@ -15,7 +15,7 @@ unreachable_pub = "warn"
 module_inception = "allow"
 
 [dependencies]
-futures-util = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tokio = { version = "1.38", features = ["net", "macros", "io-util", "rt", "time"] }
 tokio-util = { version = "0.7.12", features = ["codec"] }
 log = "0.4"

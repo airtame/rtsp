@@ -12,7 +12,7 @@ pub struct Request {
 }
 
 impl Request {
-    pub(crate) fn new(
+    pub(crate) fn parse(
         start_line: &[u8],
         headers: MessageHeaders,
         body: tokio_util::bytes::Bytes,

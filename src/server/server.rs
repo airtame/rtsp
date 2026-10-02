@@ -1,4 +1,5 @@
 use crate::connection::{Connection, ConnectionCloseReason};
+use crate::router::Router;
 use crate::server::ServerDelegate;
 
 const MAX_CONNECTION_BACKLOG: u32 = 1024;
@@ -7,6 +8,7 @@ pub struct Server {
     listener: tokio::net::TcpListener,
     cancellation_token: tokio_util::sync::CancellationToken,
     connection_idle_timeout: Option<std::time::Duration>,
+    router: Router,
 }
 
 impl Server {
@@ -27,11 +29,17 @@ impl Server {
             listener,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             connection_idle_timeout: None,
+            router: Router::new(),
         })
     }
 
     pub fn with_connection_idle_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.connection_idle_timeout = Some(timeout);
+        self
+    }
+
+    pub fn with_router(mut self, router: Router) -> Self {
+        self.router = router;
         self
     }
 
@@ -82,8 +90,12 @@ impl Server {
     ) {
         log::debug!("[rtsp] new connection from {addr}");
 
-        let (mut connection, connection_handle) =
-            Connection::new(stream, addr, self.cancellation_token.child_token());
+        let (mut connection, connection_handle) = Connection::new(
+            stream,
+            addr,
+            self.cancellation_token.child_token(),
+            self.router.clone(),
+        );
         if let Some(idle_timeout) = self.connection_idle_timeout {
             connection = connection.with_idle_timeout(idle_timeout);
         }

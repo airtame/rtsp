@@ -1,4 +1,4 @@
-use crate::message::{Message, MessageError, MessageHeaders};
+use crate::message::{MalformedMessage, Message, MessageError, MessageHeaders};
 
 const CRLF: &[u8] = b"\r\n";
 const DOUBLE_CRLF: &[u8] = b"\r\n\r\n";
@@ -10,7 +10,7 @@ pub(crate) struct MessageCodec {}
 // return an I/O error ("bytes remaining on stream"), so the connection closes as Io instead of
 // ClosedByPeer. Override decode_eof to handle that case.
 impl tokio_util::codec::Decoder for MessageCodec {
-    type Item = Message;
+    type Item = Result<Message, MalformedMessage>;
     type Error = MessageError;
 
     fn decode(
@@ -46,8 +46,12 @@ impl tokio_util::codec::Decoder for MessageCodec {
         let raw_message = src.split_to(message_length).freeze();
         let start_line = &raw_message[..start_line_length];
         let body = raw_message.slice(message_head_end + DOUBLE_CRLF.len()..);
+        let cseq = headers.get("CSeq").map(str::to_owned);
 
-        Ok(Some(Message::new(start_line, headers, body)?))
+        Ok(Some(
+            Message::new(start_line, headers, body)
+                .map_err(|error| MalformedMessage { error, cseq }),
+        ))
     }
 }
 

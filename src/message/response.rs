@@ -1,4 +1,6 @@
-use crate::message::{MessageError, MessageHeaders, Version};
+use crate::message::{MessageError, MessageHeaders, StatusCode, Version};
+
+const CSEQ: &str = "CSeq";
 
 #[derive(Debug)]
 pub struct Response {
@@ -10,7 +12,46 @@ pub struct Response {
 }
 
 impl Response {
-    pub(crate) fn new(
+    pub fn new(version: Version, status_code: StatusCode) -> Self {
+        Self {
+            version,
+            status_code: status_code.code(),
+            reason_phrase: status_code.reason_phrase().to_owned(),
+            headers: MessageHeaders::default(),
+            body: tokio_util::bytes::Bytes::new(),
+        }
+    }
+
+    pub fn with_reason_phrase(mut self, reason_phrase: impl Into<String>) -> Self {
+        self.reason_phrase = reason_phrase.into();
+        self
+    }
+
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.append(name.into(), value.into());
+        self
+    }
+
+    pub fn with_body(mut self, body: impl Into<Vec<u8>>) -> Self {
+        self.body = tokio_util::bytes::Bytes::from(body.into());
+        self
+    }
+
+    pub(crate) fn with_replaced_header(mut self, name: &str, value: &str) -> Self {
+        self.headers.remove(name);
+        self.headers.append(name.to_owned(), value.to_owned());
+        self
+    }
+
+    pub(crate) fn with_cseq(self, cseq: &str) -> Self {
+        if cseq.is_empty() || !cseq.bytes().all(|byte| byte.is_ascii_digit()) {
+            return self;
+        }
+
+        self.with_replaced_header(CSEQ, cseq)
+    }
+
+    pub(crate) fn parse(
         start_line: &[u8],
         headers: MessageHeaders,
         body: tokio_util::bytes::Bytes,

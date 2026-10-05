@@ -1,6 +1,8 @@
 use futures_util::{SinkExt, StreamExt};
 
-use crate::connection::{ConnectionCloseReason, ConnectionHandle, ConnectionOptions};
+use crate::connection::{
+    ConnectionCloseReason, ConnectionHandle, ConnectionOptions, PendingRequest,
+};
 use crate::message::{Message, MessageCodec, MessageError, Response, StatusCode, Version};
 use crate::router::RequestHandler;
 
@@ -13,6 +15,9 @@ pub(crate) struct Connection {
     cancellation_token: tokio_util::sync::CancellationToken,
     handler: std::sync::Arc<dyn RequestHandler>,
     options: ConnectionOptions,
+    request_rx: tokio::sync::mpsc::UnboundedReceiver<PendingRequest>,
+    pending_responses: std::collections::HashMap<u32, tokio::sync::oneshot::Sender<Response>>,
+    next_cseq: u32,
 }
 
 impl Connection {
@@ -23,14 +28,27 @@ impl Connection {
         handler: std::sync::Arc<dyn RequestHandler>,
         options: ConnectionOptions,
     ) -> (Self, ConnectionHandle) {
-        let handle = ConnectionHandle::new(peer_addr, cancellation_token.clone());
+        let (request_tx, request_rx) = tokio::sync::mpsc::unbounded_channel();
+        let handle = ConnectionHandle::new(peer_addr, cancellation_token.clone(), request_tx);
         let framed_tcp_stream = tokio_util::codec::Framed::with_capacity(
             stream,
             MessageCodec::new(options.parsing_mode()),
             READ_BUFFER_SIZE,
         );
 
-        (Self { framed_tcp_stream, peer_addr, cancellation_token, handler, options }, handle)
+        (
+            Self {
+                framed_tcp_stream,
+                peer_addr,
+                cancellation_token,
+                handler,
+                options,
+                request_rx,
+                pending_responses: std::collections::HashMap::new(),
+                next_cseq: 1,
+            },
+            handle,
+        )
     }
 
     pub(crate) fn peer_addr(&self) -> std::net::SocketAddr {
@@ -81,8 +99,20 @@ impl Connection {
                                 }
                                 Ok(Message::Response(response)) => {
                                     log::debug!("[rtsp] response from {}:\n{response}", self.peer_addr);
-                                    // TODO(atokodi): Should notify the embedder about this new
-                                    // message so it can process it.
+
+                                    let response_tx = response
+                                        .headers()
+                                        .get(CSEQ)
+                                        .and_then(|cseq| cseq.parse::<u32>().ok())
+                                        .and_then(|cseq| self.pending_responses.remove(&cseq));
+                                    match response_tx {
+                                        Some(response_tx) => {
+                                            if response_tx.send(response).is_err() {
+                                                log::debug!("[rtsp] response from {} arrived after its request was abandoned", self.peer_addr);
+                                            }
+                                        }
+                                        None => log::warn!("[rtsp] response from {} matches no pending request", self.peer_addr),
+                                    }
                                 }
                                 Err(malformed) => {
                                     if let Err(err) = self.reject(&malformed.error, malformed.cseq.as_deref()).await {
@@ -99,6 +129,18 @@ impl Connection {
                             return ConnectionCloseReason::InvalidMessage(err);
                         }
                     }
+                }
+                Some(pending) = self.request_rx.recv() => {
+                    let cseq = self.next_cseq;
+                    self.next_cseq = self.next_cseq.wrapping_add(1);
+
+                    let request = pending.request.with_cseq(cseq);
+                    log::debug!("[rtsp] request to {}:\n{request}", self.peer_addr);
+
+                    if let Err(err) = self.framed_tcp_stream.send(Message::Request(request)).await {
+                        return ConnectionCloseReason::Io(err);
+                    }
+                    self.pending_responses.insert(cseq, pending.response_tx);
                 }
             }
         }

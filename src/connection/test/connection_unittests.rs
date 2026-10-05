@@ -1,7 +1,8 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
-use crate::message::{ParsingMode, Request, Response, StatusCode, Version};
+use crate::connection::RequestError;
+use crate::message::{ParsingMode, Request, RequestMethod, Response, StatusCode, Version};
 use crate::router::Router;
 
 const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -481,4 +482,223 @@ async fn run_answers_pipelined_requests_in_order() {
     });
 
     assert_eq!(response, expected);
+}
+
+fn options_request() -> Request {
+    Request::new(RequestMethod::Options, "*", Version::V1)
+}
+
+async fn read_request(peer: &mut tokio::net::TcpStream, length: usize) -> String {
+    read_response(peer, length).await
+}
+
+async fn send_and_answer(
+    outgoing: Request,
+    request_length: usize,
+    answer: &[u8],
+) -> (String, Result<Response, RequestError>) {
+    let TestConnection { client: mut peer, connection, handle, .. } = connect().await;
+
+    let (_, response, request) = tokio::join!(
+        run_until_closed(connection),
+        async {
+            let response = handle.send(outgoing).await;
+            handle.close();
+            response
+        },
+        async {
+            let request = read_request(&mut peer, request_length).await;
+            peer.write_all(answer).await.expect("peer write failed");
+            request
+        }
+    );
+
+    (request, response)
+}
+
+#[tokio::test]
+async fn send_writes_request_with_cseq_and_returns_matching_response() {
+    let expected_request = "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+
+    let (request, response) = send_and_answer(
+        options_request(),
+        expected_request.len(),
+        b"RTSP/1.0 200 OK\r\nCSeq: 1\r\nPublic: OPTIONS, DESCRIBE\r\n\r\n",
+    )
+    .await;
+
+    assert_eq!(request, expected_request);
+    let response = response.expect("send should succeed");
+    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.headers().get("Public"), Some("OPTIONS, DESCRIBE"));
+}
+
+#[tokio::test]
+async fn send_replaces_cseq_set_by_caller() {
+    let expected_request = "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+
+    let (request, response) = send_and_answer(
+        options_request().with_header("CSeq", "99"),
+        expected_request.len(),
+        b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n",
+    )
+    .await;
+
+    assert_eq!(request, expected_request);
+    assert!(response.is_ok(), "unexpected response: {response:?}");
+}
+
+#[tokio::test]
+async fn send_numbers_requests_with_increasing_cseq() {
+    let TestConnection { client: mut peer, connection, handle, .. } = connect().await;
+    let first_request = "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+    let second_request = "OPTIONS * RTSP/1.0\r\nCSeq: 2\r\n\r\n";
+
+    let (_, responses, requests) = tokio::join!(
+        run_until_closed(connection),
+        async {
+            let first = handle.send(options_request()).await;
+            let second = handle.send(options_request()).await;
+            handle.close();
+            (first, second)
+        },
+        async {
+            let first = read_request(&mut peer, first_request.len()).await;
+            peer.write_all(b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n").await.expect("peer write failed");
+            let second = read_request(&mut peer, second_request.len()).await;
+            peer.write_all(b"RTSP/1.0 200 OK\r\nCSeq: 2\r\n\r\n").await.expect("peer write failed");
+            (first, second)
+        }
+    );
+
+    assert_eq!(requests, (first_request.to_owned(), second_request.to_owned()));
+    assert!(responses.0.is_ok() && responses.1.is_ok(), "unexpected responses: {responses:?}");
+}
+
+#[tokio::test]
+async fn send_matches_out_of_order_responses_by_cseq() {
+    let TestConnection { client: mut peer, connection, handle, .. } = connect().await;
+    let expected_requests = "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n\
+                             DESCRIBE rtsp://example.com/stream RTSP/1.0\r\nCSeq: 2\r\n\r\n";
+
+    let (_, (options, describe), requests) = tokio::join!(
+        run_until_closed(connection),
+        async {
+            let responses = tokio::join!(
+                handle.send(options_request()),
+                handle.send(Request::new(
+                    RequestMethod::Describe,
+                    "rtsp://example.com/stream",
+                    Version::V1
+                )),
+            );
+            handle.close();
+            responses
+        },
+        async {
+            let requests = read_request(&mut peer, expected_requests.len()).await;
+            peer.write_all(
+                b"RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Length: 5\r\n\r\nv=0\r\n\
+                  RTSP/1.0 200 OK\r\nCSeq: 1\r\nPublic: OPTIONS, DESCRIBE\r\n\r\n",
+            )
+            .await
+            .expect("peer write failed");
+            requests
+        }
+    );
+
+    assert_eq!(requests, expected_requests);
+    let options = options.expect("OPTIONS should succeed");
+    assert_eq!(options.headers().get("Public"), Some("OPTIONS, DESCRIBE"));
+    let describe = describe.expect("DESCRIBE should succeed");
+    assert_eq!(describe.body(), b"v=0\r\n");
+}
+
+#[tokio::test]
+async fn send_fails_when_connection_closes_before_response() {
+    let TestConnection { client: mut peer, connection, handle, .. } = connect().await;
+    let expected_request = "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+
+    let (reason, result, _) =
+        tokio::join!(run_until_closed(connection), handle.send(options_request()), async {
+            read_request(&mut peer, expected_request.len()).await;
+            drop(peer);
+        });
+
+    assert!(matches!(result, Err(RequestError::ConnectionClosed)), "unexpected result: {result:?}");
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
+async fn send_queues_request_before_response_is_awaited() {
+    let TestConnection { client: mut peer, connection, handle, .. } = connect().await;
+    let expected_request = "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+    let pending = handle.send(options_request());
+
+    let (_, (request, response)) = tokio::join!(run_until_closed(connection), async {
+        let request = read_request(&mut peer, expected_request.len()).await;
+        peer.write_all(b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n").await.expect("peer write failed");
+        let response = pending.await;
+        handle.close();
+        (request, response)
+    });
+
+    assert_eq!(request, expected_request);
+    assert_eq!(response.expect("send should succeed").status_code(), 200);
+}
+
+#[tokio::test]
+async fn run_sends_request_whose_response_future_was_dropped() {
+    let TestConnection { client: mut peer, connection, handle, .. } = connect().await;
+    let expected_request = "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+    drop(handle.send(options_request()));
+
+    let (reason, request) = tokio::join!(run_until_closed(connection), async {
+        let request = read_request(&mut peer, expected_request.len()).await;
+        peer.write_all(b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n").await.expect("peer write failed");
+        drop(peer);
+        request
+    });
+
+    assert_eq!(request, expected_request);
+    assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
+}
+
+#[tokio::test]
+async fn send_fails_after_connection_has_ended() {
+    let TestConnection { client, connection, handle, .. } = connect().await;
+    drop(client);
+    run_until_closed(connection).await;
+
+    let result = handle.send(options_request()).await;
+
+    assert!(matches!(result, Err(RequestError::ConnectionClosed)), "unexpected result: {result:?}");
+}
+
+#[tokio::test]
+async fn run_answers_peer_requests_while_own_request_is_pending() {
+    let TestConnection { client: mut peer, connection, handle, .. } = connect().await;
+    let own_request = "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+    let not_found = "RTSP/1.0 404 Not Found\r\nCSeq: 7\r\n\r\n";
+
+    let (_, response, answer) = tokio::join!(
+        run_until_closed(connection),
+        async {
+            let response = handle.send(options_request()).await;
+            handle.close();
+            response
+        },
+        async {
+            read_request(&mut peer, own_request.len()).await;
+            peer.write_all(b"GET_PARAMETER * RTSP/1.0\r\nCSeq: 7\r\n\r\n")
+                .await
+                .expect("peer write failed");
+            let answer = read_response(&mut peer, not_found.len()).await;
+            peer.write_all(b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n").await.expect("peer write failed");
+            answer
+        }
+    );
+
+    assert_eq!(answer, not_found);
+    assert_eq!(response.expect("send should succeed").status_code(), 200);
 }

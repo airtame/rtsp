@@ -5,7 +5,10 @@ mod router;
 mod server;
 
 pub use client::Client;
-pub use connection::{ConnectionCloseReason, ConnectionHandle, ConnectionOptions, ConnectionTask};
+pub use connection::{
+    ConnectionCloseReason, ConnectionHandle, ConnectionOptions, ConnectionTask, RequestError,
+    ResponseFuture,
+};
 pub use message::{
     MessageError, MessageHeaders, ParsingMode, Request, RequestMethod, Response, StatusCode,
     Version,

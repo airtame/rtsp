@@ -14,6 +14,41 @@ pub struct Request {
 }
 
 impl Request {
+    pub fn new(method: RequestMethod, uri: impl Into<String>, version: Version) -> Self {
+        let uri = uri.into();
+        assert!(
+            !uri.is_empty() && !uri.contains(|c: char| c.is_whitespace() || c.is_control()),
+            "invalid request URI: {uri:?}"
+        );
+        let (path, query) = Self::parse_uri(&uri);
+
+        Self {
+            method,
+            uri,
+            path,
+            query,
+            version,
+            headers: MessageHeaders::default(),
+            body: tokio_util::bytes::Bytes::new(),
+        }
+    }
+
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.append(name.into(), value.into());
+        self
+    }
+
+    pub fn with_body(mut self, body: impl Into<Vec<u8>>) -> Self {
+        self.body = tokio_util::bytes::Bytes::from(body.into());
+        self
+    }
+
+    pub(crate) fn with_cseq(mut self, cseq: u32) -> Self {
+        self.headers.remove(CSEQ);
+        self.headers.append(CSEQ.to_owned(), cseq.to_string());
+        self
+    }
+
     pub(crate) fn parse(
         start_line: &[u8],
         headers: MessageHeaders,

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`rtsp` is a Rust library crate (edition 2024, Rust 1.85+) for asynchronous RTSP 1.0/2.0 connections on Tokio. It is in early development: the server works, the client can connect and answer requests from the server but can't send requests yet, and prefix routing is not implemented. The **Status** paragraph in `README.md` describes connection behavior in detail. Feature commits have updated it along with the code, so keep it in sync when behavior changes.
+`rtsp` is a Rust library crate (edition 2024, Rust 1.85+) for asynchronous RTSP 1.0/2.0 connections on Tokio. It is in early development: the server and client work, and both sides can send requests through a `ConnectionHandle`, but prefix routing is not implemented. The **Status** paragraph in `README.md` describes connection behavior in detail. Feature commits have updated it along with the code, so keep it in sync when behavior changes. Known issues and deferred work are listed in `TODO.md`.
 
 ## Commands
 
@@ -31,7 +31,7 @@ Example server: `cargo run --example server [addr]` listens on `127.0.0.1:8554` 
 printf 'DESCRIBE rtsp://127.0.0.1:8554/stream1 RTSP/1.0\r\nCSeq: 1\r\n\r\n' | nc 127.0.0.1 8554
 ```
 
-Example client: `cargo run --example client [addr]` connects to `127.0.0.1:8554` by default. To have a fake server send it a request, start this before the client:
+Example client: `cargo run --example client [addr]` connects to `127.0.0.1:8554` by default and sends `OPTIONS` and `DESCRIBE` for `/stream1`, so run the server example first. To have a fake server send the client a request instead, start this before the client:
 
 ```sh
 printf 'GET_PARAMETER rtsp://127.0.0.1:8554/ RTSP/1.0\r\nCSeq: 1\r\n\r\n' | nc -l 8554
@@ -41,7 +41,14 @@ printf 'GET_PARAMETER rtsp://127.0.0.1:8554/ RTSP/1.0\r\nCSeq: 1\r\n\r\n' | nc -
 
 `src/lib.rs` declares five private modules (`server`, `client`, `connection`, `message`, `router`) and re-exports the public API.
 
-**Request flow.** `Server::run` accepts TCP connections and builds a `Connection` for each one, using the `ConnectionOptions` (idle timeout, `ParsingMode`) returned by `ServerDelegate::connection_options(peer_addr)`. The server passes the connection's `ConnectionHandle` to `ServerDelegate::on_new_connection`, then spawns `Connection::run` in a `JoinSet`. `Connection` wraps the stream in `Framed<TcpStream, MessageCodec>`. Each decoded request goes to the connection's `Arc<dyn RequestHandler>`. The server passes its `Router`, which implements `RequestHandler`. `Connection` then copies the request's `CSeq` onto the response and writes it back. Copying `CSeq` in `Connection` means it applies to every handler, not just the router. Responses received from the peer are only logged.
+**Request flow.** `Server::run` accepts TCP connections and builds a `Connection` for each one, using the `ConnectionOptions` (idle timeout, `ParsingMode`) returned by `ServerDelegate::connection_options(peer_addr)`. The server passes the connection's `ConnectionHandle` to `ServerDelegate::on_new_connection`, then spawns `Connection::run` in a `JoinSet`. `Connection` wraps the stream in `Framed<TcpStream, MessageCodec>`. Each decoded request goes to the connection's `Arc<dyn RequestHandler>`. The server passes its `Router`, which implements `RequestHandler`. `Connection` then copies the request's `CSeq` onto the response and writes it back. Copying `CSeq` in `Connection` means it applies to every handler, not just the router.
+
+**Sending requests.** `ConnectionHandle::send` is synchronous. It puts a `PendingRequest` on an unbounded `mpsc` channel to the connection and returns a `ResponseFuture`. A `PendingRequest` is the request plus a `oneshot::Sender<Response>`, and the `ResponseFuture` wraps the matching `oneshot::Receiver`. Because the request is queued immediately, it goes out even if the future is only awaited later or dropped (fire-and-forget), and handlers and delegate callbacks can call `send` without blocking. A dedicated `select!` branch in `Connection::run` then:
+- overwrites the caller's `CSeq` with the connection's own counter (`next_cseq`, starting at 1);
+- writes the request;
+- stores the oneshot in `pending_responses`, keyed by that `CSeq`.
+
+An incoming response completes the oneshot whose `CSeq` it carries. Responses with an unknown or missing `CSeq` are logged and dropped. When `run` returns, the receiver and the pending oneshots are dropped, so pending and later `ResponseFuture`s resolve to `RequestError::ConnectionClosed`. If the connection is already gone, `send` drops the `PendingRequest` and its oneshot sender, so its future fails immediately without a special case. The peer's requests have their own `CSeq` sequence and don't interact with outgoing ones.
 
 **Client.** `Client::connect` opens a TCP stream and builds the same `Connection`, using the client's handler (an empty `Router` by default), its `ConnectionOptions` and a fresh `CancellationToken`. It returns the `ConnectionHandle` and a `ConnectionTask`. `ConnectionTask` is a public boxed future around the crate-private `Connection::run`, and the embedder must await or spawn it. The server doesn't use `ConnectionTask`; it runs `Connection::run` directly in its `JoinSet`.
 

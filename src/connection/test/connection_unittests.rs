@@ -2,6 +2,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
 use crate::message::{ParsingMode, Request, Response, StatusCode, Version};
+use crate::router::Router;
 
 const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const OPTIONS_REQUEST: &[u8] = b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
@@ -28,7 +29,10 @@ async fn connect_with_options(options: ConnectionOptions) -> TestConnection {
     connect_with(Router::new(), options).await
 }
 
-async fn connect_with(router: Router, options: ConnectionOptions) -> TestConnection {
+async fn connect_with(
+    handler: impl RequestHandler + 'static,
+    options: ConnectionOptions,
+) -> TestConnection {
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
         .expect("listener bind failed");
@@ -39,8 +43,13 @@ async fn connect_with(router: Router, options: ConnectionOptions) -> TestConnect
     let (stream, peer_addr) = accepted.expect("accept failed");
 
     let cancellation_token = tokio_util::sync::CancellationToken::new();
-    let (connection, handle) =
-        Connection::new(stream, peer_addr, cancellation_token.clone(), router, options);
+    let (connection, handle) = Connection::new(
+        stream,
+        peer_addr,
+        cancellation_token.clone(),
+        std::sync::Arc::new(handler),
+        options,
+    );
 
     TestConnection { client, connection, handle, cancellation_token }
 }
@@ -66,17 +75,15 @@ async fn new_returns_handle_for_same_peer() {
 }
 
 #[tokio::test]
-async fn debug_shows_peer_address_options_and_router() {
+async fn debug_shows_peer_address_and_options() {
     let options = ConnectionOptions::new().with_idle_timeout(std::time::Duration::from_secs(60));
-    let TestConnection { client, connection, .. } =
-        connect_with(router_with_stream(), options).await;
+    let TestConnection { client, connection, .. } = connect_with_options(options).await;
 
     assert_eq!(
         format!("{connection:?}"),
         format!(
             "Connection {{ peer_addr: {}, options: ConnectionOptions {{ idle_timeout: Some(60s), \
-             parsing_mode: Strict, activity_hook: false }}, \
-             router: Router {{ paths: [\"/stream1\"] }}, .. }}",
+             parsing_mode: Strict, activity_hook: false }}, .. }}",
             client.local_addr().unwrap()
         )
     );
@@ -403,6 +410,50 @@ async fn run_answers_request_with_response_of_registered_handler() {
     let (_, response) = tokio::join!(run_until_closed(connection), async {
         client
             .write_all(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0\r\nCSeq: 2\r\n\r\n")
+            .await
+            .expect("client write failed");
+        let response = read_response(&mut client, expected.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, expected);
+}
+
+#[tokio::test]
+async fn run_copies_cseq_into_response_of_any_handler() {
+    let handler = |_: &Request| Response::new(Version::V1, StatusCode::Ok);
+    let TestConnection { mut client, connection, .. } =
+        connect_with(handler, ConnectionOptions::default()).await;
+    let expected = "RTSP/1.0 200 OK\r\nCSeq: 3\r\n\r\n";
+
+    let (_, response) = tokio::join!(run_until_closed(connection), async {
+        client
+            .write_all(b"OPTIONS * RTSP/1.0\r\nCSeq: 3\r\n\r\n")
+            .await
+            .expect("client write failed");
+        let response = read_response(&mut client, expected.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, expected);
+}
+
+#[tokio::test]
+async fn run_replaces_cseq_set_by_handler() {
+    let handler = |_: &Request| {
+        Response::new(Version::V1, StatusCode::Ok)
+            .with_header("cseq", "1")
+            .with_header("Session", "12345678")
+    };
+    let TestConnection { mut client, connection, .. } =
+        connect_with(handler, ConnectionOptions::default()).await;
+    let expected = "RTSP/1.0 200 OK\r\nSession: 12345678\r\nCSeq: 9\r\n\r\n";
+
+    let (_, response) = tokio::join!(run_until_closed(connection), async {
+        client
+            .write_all(b"OPTIONS * RTSP/1.0\r\nCSeq: 9\r\n\r\n")
             .await
             .expect("client write failed");
         let response = read_response(&mut client, expected.len()).await;

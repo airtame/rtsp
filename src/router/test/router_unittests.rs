@@ -236,75 +236,24 @@ fn route_answers_not_found_with_request_version() {
 }
 
 #[test]
-fn route_copies_cseq_into_response() {
+fn route_leaves_cseq_to_the_connection() {
     let router = Router::new();
     router.register("/stream1", respond_with(StatusCode::Ok));
 
     let response = router
         .route(&request_with_headers(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0", "CSeq: 7"));
 
-    assert_eq!(response.headers().get("CSeq"), Some("7"));
-}
-
-#[test]
-fn route_copies_cseq_into_not_found_response() {
-    let response = Router::new()
-        .route(&request_with_headers(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0", "CSeq: 8"));
-
-    assert_eq!(response.status_code(), 404);
-    assert_eq!(response.headers().get("CSeq"), Some("8"));
-}
-
-#[test]
-fn route_replaces_cseq_set_by_handler() {
-    let router = Router::new();
-    router.register("/stream1", |_: &Request| {
-        Response::new(Version::V1, StatusCode::Ok)
-            .with_header("cseq", "1")
-            .with_header("Session", "1234")
-    });
-
-    let response = router
-        .route(&request_with_headers(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0", "CSeq: 9"));
-
-    assert_eq!(response.headers().to_string(), "Session: 1234\nCSeq: 9");
-}
-
-#[test]
-fn route_leaves_response_without_cseq_when_request_has_none() {
-    let router = Router::new();
-    router.register("/stream1", respond_with(StatusCode::Ok));
-
-    let response = router.route(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
-
     assert_eq!(response.headers().get("CSeq"), None);
 }
 
 #[test]
-fn route_does_not_copy_cseq_that_is_not_a_number() {
+fn handle_routes_request_like_route() {
     let router = Router::new();
     router.register("/stream1", respond_with(StatusCode::Ok));
 
-    for cseq in ["", "abc", "1 2", "-1"] {
-        let response = router.route(&request_with_headers(
-            b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0",
-            &format!("CSeq: {cseq}"),
-        ));
+    let found = router.handle(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
+    let not_found = router.handle(&request(b"DESCRIBE rtsp://example.com/stream2 RTSP/1.0"));
 
-        assert_eq!(response.headers().get("CSeq"), None, "CSeq: {cseq:?}");
-    }
-}
-
-#[test]
-fn route_does_not_copy_cseq_with_line_break() {
-    let router = Router::new();
-    router.register("/stream1", respond_with(StatusCode::Ok));
-
-    let response = router.route(&request_with_headers(
-        b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0",
-        "CSeq: 1\nX-Injected: yes",
-    ));
-
-    assert_eq!(response.headers().get("CSeq"), None);
-    assert_eq!(response.headers().get("X-Injected"), None);
+    assert_eq!(found.status_code(), 200);
+    assert_eq!(not_found.status_code(), 404);
 }

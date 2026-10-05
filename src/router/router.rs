@@ -1,8 +1,6 @@
 use crate::message::{Request, Response, StatusCode};
 use crate::router::RequestHandler;
 
-const CSEQ: &str = "CSeq";
-
 type Routes = std::collections::HashMap<String, std::sync::Arc<dyn RequestHandler>>;
 
 #[derive(Clone, Default)]
@@ -32,14 +30,9 @@ impl Router {
     }
 
     pub(crate) fn route(&self, request: &Request) -> Response {
-        let response = match self.get(request.path()) {
+        match self.get(request.path()) {
             Some(handler) => handler.handle(request),
             None => Response::new(request.version().clone(), StatusCode::NotFound),
-        };
-
-        match request.headers().get(CSEQ) {
-            Some(cseq) => response.with_cseq(cseq),
-            None => response,
         }
     }
 
@@ -59,6 +52,12 @@ impl std::fmt::Debug for Router {
         paths.sort();
 
         f.debug_struct("Router").field("paths", &paths).finish()
+    }
+}
+
+impl RequestHandler for Router {
+    fn handle(&self, request: &Request) -> Response {
+        self.route(request)
     }
 }
 

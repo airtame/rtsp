@@ -4,17 +4,21 @@ Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, b
 [Tokio](https://tokio.rs).
 
 > **Status:** early development. The crate currently provides a TCP server that runs each
-> accepted connection in its own task and shuts them all down gracefully when stopped.
-> Incoming RTSP requests are answered by the `RequestHandler` registered for their path in the
-> `Router` (`Server::with_router`), or with `404 Not Found`; responses from the peer are only
-> logged. A message with an invalid start line is answered with `400 Bad Request` and the
-> connection keeps going; prefix routing and the client side are not implemented. A connection
-> stays open until the peer disconnects, the server stops, a message arrives whose end can't be
-> determined (invalid headers or `Content-Length`, answered with `400 Bad Request` before
-> closing), no complete message arrives within the optional idle timeout
-> (`ConnectionOptions::with_idle_timeout`, returned for each new connection by
-> `ServerDelegate::connection_options`), or the embedder closes it through the
-> `ConnectionHandle` passed to `ServerDelegate::on_new_connection`. `ConnectionOptions` also
+> accepted connection in its own task and shuts them all down gracefully when stopped, and a
+> `Client` whose `connect` returns a `ConnectionHandle` and a `ConnectionTask`, a future that
+> drives the connection until it closes. Incoming RTSP requests are answered by a
+> `RequestHandler`: on the server, the one registered for their path in the `Router`
+> (`Server::with_router`), or `404 Not Found`; on the client, the one set with
+> `Client::with_handler` (an empty `Router` by default). The response gets the request's
+> `CSeq`. Responses from the peer are only logged, and the client can't send requests yet. A
+> message with an invalid start line is answered with `400 Bad Request` and the connection
+> keeps going; prefix routing is not implemented. A connection stays open until the peer
+> disconnects, the server stops, a message arrives whose end can't be determined (invalid
+> headers or `Content-Length`, answered with `400 Bad Request` before closing), no complete
+> message arrives within the optional idle timeout (`ConnectionOptions::with_idle_timeout`,
+> returned for each new connection by `ServerDelegate::connection_options` or set with
+> `Client::with_connection_options`), or the embedder closes it through its `ConnectionHandle`
+> (passed to `ServerDelegate::on_new_connection`, or returned by `Client::connect`). `ConnectionOptions` also
 > sets the `ParsingMode`. In `Strict` mode (the default) messages must use RTSP/1.0 or RTSP/2.0
 > and requests must carry `CSeq`; anything else is answered with `400 Bad Request` and the
 > connection keeps going. `Lenient` mode also accepts other versions such as `HTTP/1.1`, and
@@ -65,6 +69,31 @@ printf 'DESCRIBE rtsp://127.0.0.1:8554/stream1 RTSP/1.0\r\nCSeq: 1\r\n\r\n' | nc
 response, and the connection closes when `nc` exits. A connection
 opened with plain `nc 127.0.0.1 8554` is closed after 60 seconds without a complete RTSP
 message; typed lines don't count, since `nc` ends them with `\n` instead of `\r\n`.
+
+### `client`
+
+Connects to a server, answers every request the server sends with `200 OK`, prints a line for
+each message it receives, and disconnects on Ctrl+C. It spawns the `ConnectionTask` returned by
+`Client::connect` and prints why the connection closed. Sending requests from the client is not
+implemented yet.
+
+```sh
+cargo run --example client                 # connects to 127.0.0.1:8554
+cargo run --example client 10.0.0.5:8554   # connects to a custom address
+```
+
+To try it, start the `server` example in another terminal first. The server logs the new
+connection, and pressing Ctrl+C in the client closes it ("connection cancelled" in the client,
+"connection closed by peer" in the server). The `server` example never sends requests, so to see
+the client's handler answer one, play the server with `nc` instead:
+
+```sh
+printf 'GET_PARAMETER rtsp://127.0.0.1:8554/ RTSP/1.0\r\nCSeq: 1\r\n\r\n' | nc -l 8554
+```
+
+Then start the client. It prints the received message and answers it; `nc` prints the
+`200 OK` response with `CSeq: 1`, then closes the connection, and the client reports that the
+peer closed it.
 
 ## License
 

@@ -42,6 +42,13 @@ fn decode_response(src: &mut tokio_util::bytes::BytesMut) -> Response {
     }
 }
 
+fn decode_lenient_request(src: &mut tokio_util::bytes::BytesMut) -> Request {
+    match MessageCodec::new(ParsingMode::Lenient).decode(src).expect("decode should succeed") {
+        Some(Ok(Message::Request(request))) => request,
+        other => panic!("expected a request, got {other:?}"),
+    }
+}
+
 #[test]
 fn decode_returns_none_for_empty_buffer() {
     let mut src = buffer(b"");
@@ -81,11 +88,11 @@ fn decode_returns_response_with_body() {
 
 #[test]
 fn decode_returns_message_without_headers() {
-    let mut src = buffer(b"OPTIONS * RTSP/1.0\r\n\r\n");
+    let mut src = buffer(b"RTSP/1.0 200 OK\r\n\r\n");
 
     let message = decode(&mut src).expect("message should be complete");
 
-    assert_eq!(message.to_string(), "OPTIONS * RTSP/1.0");
+    assert_eq!(message.to_string(), "RTSP/1.0 200 OK");
     assert!(src.is_empty());
 }
 
@@ -243,7 +250,7 @@ fn decode_parses_whole_request() {
 #[test]
 fn decode_parses_whole_request_with_body() {
     let mut src = buffer(
-        b"ANNOUNCE rtsp://example.com/stream RTSP/1.0\r\nContent-Length: 13\r\n\r\nv=0\r\ns=Test\r\n",
+        b"ANNOUNCE rtsp://example.com/stream RTSP/1.0\r\nCSeq: 1\r\nContent-Length: 13\r\n\r\nv=0\r\ns=Test\r\n",
     );
 
     let request = decode_request(&mut src);
@@ -255,15 +262,28 @@ fn decode_parses_whole_request_with_body() {
 }
 
 #[test]
-fn decode_parses_whole_request_without_headers() {
+fn decode_parses_whole_request_without_headers_in_lenient_mode() {
     let mut src = buffer(b"OPTIONS * RTSP/2.0\r\n\r\n");
 
-    let request = decode_request(&mut src);
+    let request = decode_lenient_request(&mut src);
 
     assert_eq!(request.method(), &RequestMethod::Options);
     assert_eq!(request.path(), "*");
     assert_eq!(request.version(), &Version::V2);
     assert_eq!(request.headers().get("CSeq"), None);
+    assert!(src.is_empty());
+}
+
+#[test]
+fn decode_parses_request_with_other_protocol_version_in_lenient_mode() {
+    let mut src = buffer(b"GET /health HTTP/1.1\r\nHost: example.com\r\n\r\n");
+
+    let request = decode_lenient_request(&mut src);
+
+    assert_eq!(request.method(), &RequestMethod::Extension("GET".to_owned()));
+    assert_eq!(request.path(), "/health");
+    assert_eq!(request.version(), &Version::Other("HTTP/1.1".to_owned()));
+    assert!(src.is_empty());
 }
 
 #[test]
@@ -371,6 +391,36 @@ fn decode_returns_malformed_message_without_cseq() {
     let malformed = decode_malformed(&mut src);
 
     assert_eq!(malformed.cseq, None);
+}
+
+#[test]
+fn decode_returns_malformed_message_for_request_without_cseq_in_strict_mode() {
+    let mut src = buffer(b"OPTIONS * RTSP/1.0\r\n\r\n");
+
+    let malformed = decode_malformed(&mut src);
+
+    assert!(
+        matches!(&malformed.error, MessageError::MissingHeader(name) if name == "CSeq"),
+        "unexpected error: {:?}",
+        malformed.error
+    );
+    assert_eq!(malformed.cseq, None);
+    assert!(src.is_empty());
+}
+
+#[test]
+fn decode_returns_malformed_message_for_other_protocol_version_in_strict_mode() {
+    let mut src = buffer(b"GET /health HTTP/1.1\r\nCSeq: 1\r\n\r\n");
+
+    let malformed = decode_malformed(&mut src);
+
+    assert!(
+        matches!(&malformed.error, MessageError::InvalidRequestLine(line) if line == "GET /health HTTP/1.1"),
+        "unexpected error: {:?}",
+        malformed.error
+    );
+    assert_eq!(malformed.cseq.as_deref(), Some("1"));
+    assert!(src.is_empty());
 }
 
 #[test]

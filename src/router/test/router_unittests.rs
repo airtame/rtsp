@@ -1,9 +1,10 @@
 use super::*;
-use crate::message::{MessageHeaders, Request, RequestMethod, Response, StatusCode, Version};
+use crate::message::{
+    MessageHeaders, ParsingMode, Request, RequestMethod, Response, StatusCode, Version,
+};
 
 fn request(start_line: &[u8]) -> Request {
-    Request::parse(start_line, MessageHeaders::default(), tokio_util::bytes::Bytes::new())
-        .expect("request line should be valid")
+    request_with_headers(start_line, "")
 }
 
 fn respond_with(status_code: StatusCode) -> impl RequestHandler {
@@ -165,7 +166,7 @@ fn request_with_headers(start_line: &[u8], header_lines: &str) -> Request {
     let headers =
         MessageHeaders::try_from(header_lines.as_bytes()).expect("headers should be valid");
 
-    Request::parse(start_line, headers, tokio_util::bytes::Bytes::new())
+    Request::parse(start_line, headers, tokio_util::bytes::Bytes::new(), ParsingMode::Lenient)
         .expect("request line should be valid")
 }
 

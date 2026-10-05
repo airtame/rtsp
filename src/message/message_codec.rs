@@ -1,10 +1,18 @@
-use crate::message::{MalformedMessage, Message, MessageError, MessageHeaders};
+use crate::message::{MalformedMessage, Message, MessageError, MessageHeaders, ParsingMode};
 
 const CRLF: &[u8] = b"\r\n";
 const DOUBLE_CRLF: &[u8] = b"\r\n\r\n";
 
 #[derive(Debug, Default)]
-pub(crate) struct MessageCodec {}
+pub(crate) struct MessageCodec {
+    parsing_mode: ParsingMode,
+}
+
+impl MessageCodec {
+    pub(crate) fn new(parsing_mode: ParsingMode) -> Self {
+        Self { parsing_mode }
+    }
+}
 
 // TODO(atokodi): A peer that disconnects in the middle of a message makes the default decode_eof
 // return an I/O error ("bytes remaining on stream"), so the connection closes as Io instead of
@@ -49,7 +57,7 @@ impl tokio_util::codec::Decoder for MessageCodec {
         let cseq = headers.get("CSeq").map(str::to_owned);
 
         Ok(Some(
-            Message::new(start_line, headers, body)
+            Message::new(start_line, headers, body, self.parsing_mode)
                 .map_err(|error| MalformedMessage { error, cseq }),
         ))
     }

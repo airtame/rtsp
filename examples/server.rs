@@ -42,6 +42,10 @@ impl rtsp::RequestHandler for ExampleStream {
 struct PrintingDelegate;
 
 impl rtsp::ServerDelegate for PrintingDelegate {
+    fn connection_options(&self, _peer_addr: std::net::SocketAddr) -> rtsp::ConnectionOptions {
+        rtsp::ConnectionOptions::new().with_idle_timeout(DEFAULT_CONNECTION_IDLE_TIMEOUT)
+    }
+
     fn on_new_connection(&self, connection: rtsp::ConnectionHandle) {
         println!("New connection from {}", connection.peer_addr());
     }
@@ -69,11 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rtsp::Response::new(request.version().clone(), rtsp::StatusCode::Ok)
     });
 
-    let server = std::sync::Arc::new(
-        rtsp::Server::bind(addr)?
-            .with_connection_idle_timeout(DEFAULT_CONNECTION_IDLE_TIMEOUT)
-            .with_router(router),
-    );
+    let server = std::sync::Arc::new(rtsp::Server::bind(addr)?.with_router(router));
     println!("RTSP server listening on rtsp://{addr}, press Ctrl+C to stop");
 
     let run = tokio::spawn({

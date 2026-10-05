@@ -8,6 +8,7 @@ pub enum MessageError {
     InvalidHeader(String),
     InvalidRequestLine(String),
     InvalidStatusLine(String),
+    MissingHeader(String),
 }
 
 impl std::fmt::Display for MessageError {
@@ -19,6 +20,7 @@ impl std::fmt::Display for MessageError {
             Self::InvalidHeader(line) => write!(f, "invalid header: {line:?}"),
             Self::InvalidRequestLine(line) => write!(f, "invalid request line: {line:?}"),
             Self::InvalidStatusLine(line) => write!(f, "invalid status line: {line:?}"),
+            Self::MissingHeader(name) => write!(f, "missing header: {name:?}"),
         }
     }
 }

@@ -1,6 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
 
-use crate::connection::{ConnectionCloseReason, ConnectionHandle};
+use crate::connection::{ConnectionCloseReason, ConnectionHandle, ConnectionOptions};
 use crate::message::{Message, MessageCodec, MessageError, Response, StatusCode, Version};
 use crate::router::Router;
 
@@ -10,8 +10,8 @@ pub(crate) struct Connection {
     framed_tcp_stream: tokio_util::codec::Framed<tokio::net::TcpStream, MessageCodec>,
     peer_addr: std::net::SocketAddr,
     cancellation_token: tokio_util::sync::CancellationToken,
-    idle_timeout: Option<std::time::Duration>,
     router: Router,
+    options: ConnectionOptions,
 }
 
 impl Connection {
@@ -20,23 +20,16 @@ impl Connection {
         peer_addr: std::net::SocketAddr,
         cancellation_token: tokio_util::sync::CancellationToken,
         router: Router,
+        options: ConnectionOptions,
     ) -> (Self, ConnectionHandle) {
         let handle = ConnectionHandle::new(peer_addr, cancellation_token.clone());
         let framed_tcp_stream = tokio_util::codec::Framed::with_capacity(
             stream,
-            MessageCodec::default(),
+            MessageCodec::new(options.parsing_mode()),
             READ_BUFFER_SIZE,
         );
 
-        (
-            Self { framed_tcp_stream, peer_addr, cancellation_token, idle_timeout: None, router },
-            handle,
-        )
-    }
-
-    pub(crate) fn with_idle_timeout(mut self, timeout: std::time::Duration) -> Self {
-        self.idle_timeout = Some(timeout);
-        self
+        (Self { framed_tcp_stream, peer_addr, cancellation_token, router, options }, handle)
     }
 
     pub(crate) fn peer_addr(&self) -> std::net::SocketAddr {
@@ -47,7 +40,7 @@ impl Connection {
         log::debug!("[rtsp] connection loop from {} started", self.peer_addr);
 
         let mut idle_timer =
-            std::pin::pin!(tokio::time::sleep(self.idle_timeout.unwrap_or_default()));
+            std::pin::pin!(tokio::time::sleep(self.options.idle_timeout().unwrap_or_default()));
 
         loop {
             tokio::select! {
@@ -55,7 +48,7 @@ impl Connection {
                     log::debug!("[rtsp] connection cancellation token triggered for {}", self.peer_addr);
                     return ConnectionCloseReason::Cancelled
                 }
-                _ = &mut idle_timer, if self.idle_timeout.is_some() => {
+                _ = &mut idle_timer, if self.options.idle_timeout().is_some() => {
                     log::debug!("[rtsp] connection idle timeout triggered for {}", self.peer_addr);
                     return ConnectionCloseReason::IdleTimeout
                 }
@@ -63,7 +56,7 @@ impl Connection {
                     match message {
                         None => return ConnectionCloseReason::ClosedByPeer,
                         Some(Ok(decoded)) => {
-                            if let Some(idle_timeout) = self.idle_timeout {
+                            if let Some(idle_timeout) = self.options.idle_timeout() {
                                 idle_timer.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                             }
 

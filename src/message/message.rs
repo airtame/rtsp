@@ -1,4 +1,4 @@
-use crate::message::{MessageError, MessageHeaders, Request, Response};
+use crate::message::{MessageError, MessageHeaders, ParsingMode, Request, Response};
 
 #[derive(Debug)]
 pub(crate) enum Message {
@@ -11,13 +11,14 @@ impl Message {
         start_line: &[u8],
         headers: MessageHeaders,
         body: tokio_util::bytes::Bytes,
+        parsing_mode: ParsingMode,
     ) -> Result<Self, MessageError> {
         let first_word =
             start_line.trim_ascii_start().split(|&byte| byte == b' ' || byte == b'\r').next();
         if first_word.is_some_and(|word| word.contains(&b'/')) {
-            Response::parse(start_line, headers, body).map(Self::Response)
+            Response::parse(start_line, headers, body, parsing_mode).map(Self::Response)
         } else {
-            Request::parse(start_line, headers, body).map(Self::Request)
+            Request::parse(start_line, headers, body, parsing_mode).map(Self::Request)
         }
     }
 

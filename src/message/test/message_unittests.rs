@@ -1,16 +1,24 @@
 use super::*;
 
-fn message(start_line: &[u8], header_lines: &str, body: &'static [u8]) -> Message {
+fn parse(
+    start_line: &[u8],
+    header_lines: &str,
+    body: &'static [u8],
+    parsing_mode: ParsingMode,
+) -> Result<Message, MessageError> {
     let headers =
         MessageHeaders::try_from(header_lines.as_bytes()).expect("headers should be valid");
     let body = tokio_util::bytes::Bytes::from_static(body);
 
-    Message::new(start_line, headers, body).expect("message should be valid")
+    Message::new(start_line, headers, body, parsing_mode)
+}
+
+fn message(start_line: &[u8], header_lines: &str, body: &'static [u8]) -> Message {
+    parse(start_line, header_lines, body, ParsingMode::Lenient).expect("message should be valid")
 }
 
 fn message_err(start_line: &[u8]) -> MessageError {
-    Message::new(start_line, MessageHeaders::default(), tokio_util::bytes::Bytes::new())
-        .expect_err("message should be invalid")
+    parse(start_line, "", b"", ParsingMode::Lenient).expect_err("message should be invalid")
 }
 
 #[test]
@@ -87,6 +95,28 @@ fn new_rejects_start_line_with_invalid_utf8() {
     let err = message_err(b"OPTIONS \xff RTSP/1.0");
 
     assert!(matches!(err, MessageError::InvalidEncoding(_)), "unexpected error: {err:?}");
+}
+
+#[test]
+fn new_passes_parsing_mode_to_request_parsing() {
+    let err = parse(b"OPTIONS * RTSP/1.0", "", b"", ParsingMode::Strict)
+        .expect_err("message should be invalid");
+
+    assert!(
+        matches!(&err, MessageError::MissingHeader(name) if name == "CSeq"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn new_passes_parsing_mode_to_response_parsing() {
+    let err = parse(b"HTTP/1.1 200 OK", "", b"", ParsingMode::Strict)
+        .expect_err("message should be invalid");
+
+    assert!(
+        matches!(&err, MessageError::InvalidStatusLine(line) if line == "HTTP/1.1 200 OK"),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[test]

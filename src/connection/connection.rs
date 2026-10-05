@@ -2,15 +2,16 @@ use futures_util::{SinkExt, StreamExt};
 
 use crate::connection::{ConnectionCloseReason, ConnectionHandle, ConnectionOptions};
 use crate::message::{Message, MessageCodec, MessageError, Response, StatusCode, Version};
-use crate::router::Router;
+use crate::router::RequestHandler;
 
 const READ_BUFFER_SIZE: usize = 4096;
+const CSEQ: &str = "CSeq";
 
 pub(crate) struct Connection {
     framed_tcp_stream: tokio_util::codec::Framed<tokio::net::TcpStream, MessageCodec>,
     peer_addr: std::net::SocketAddr,
     cancellation_token: tokio_util::sync::CancellationToken,
-    router: Router,
+    handler: std::sync::Arc<dyn RequestHandler>,
     options: ConnectionOptions,
 }
 
@@ -19,7 +20,7 @@ impl Connection {
         stream: tokio::net::TcpStream,
         peer_addr: std::net::SocketAddr,
         cancellation_token: tokio_util::sync::CancellationToken,
-        router: Router,
+        handler: std::sync::Arc<dyn RequestHandler>,
         options: ConnectionOptions,
     ) -> (Self, ConnectionHandle) {
         let handle = ConnectionHandle::new(peer_addr, cancellation_token.clone());
@@ -29,7 +30,7 @@ impl Connection {
             READ_BUFFER_SIZE,
         );
 
-        (Self { framed_tcp_stream, peer_addr, cancellation_token, router, options }, handle)
+        (Self { framed_tcp_stream, peer_addr, cancellation_token, handler, options }, handle)
     }
 
     pub(crate) fn peer_addr(&self) -> std::net::SocketAddr {
@@ -67,7 +68,11 @@ impl Connection {
                                 Ok(Message::Request(request)) => {
                                     log::debug!("[rtsp] request from {}:\n{request}", self.peer_addr);
 
-                                    let response = self.router.route(&request);
+                                    let response = self.handler.handle(&request);
+                                    let response = match request.headers().get(CSEQ) {
+                                        Some(cseq) => response.with_cseq(cseq),
+                                        None => response,
+                                    };
                                     log::debug!("[rtsp] response to {}:\n{response}", self.peer_addr);
 
                                     if let Err(err) = self.framed_tcp_stream.send(Message::Response(response)).await {
@@ -116,7 +121,6 @@ impl std::fmt::Debug for Connection {
         f.debug_struct("Connection")
             .field("peer_addr", &self.peer_addr)
             .field("options", &self.options)
-            .field("router", &self.router)
             .finish_non_exhaustive()
     }
 }

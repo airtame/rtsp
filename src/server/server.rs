@@ -85,7 +85,7 @@ impl Server {
             stream,
             addr,
             self.cancellation_token.child_token(),
-            self.router.clone(),
+            std::sync::Arc::new(self.router.clone()),
             delegate.connection_options(addr),
         );
         log::debug!("[rtsp] new connection: {connection:?}");

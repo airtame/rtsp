@@ -252,6 +252,40 @@ fn with_body_replaces_previous_body() {
 }
 
 #[test]
+fn with_cseq_adds_cseq() {
+    let response = Response::new(Version::V1, StatusCode::Ok).with_cseq("7");
+
+    assert_eq!(response.headers().get("CSeq"), Some("7"));
+}
+
+#[test]
+fn with_cseq_replaces_cseq_in_any_case_and_moves_it_last() {
+    let response = Response::new(Version::V1, StatusCode::Ok)
+        .with_header("cseq", "1")
+        .with_header("Session", "12345678")
+        .with_cseq("9");
+
+    assert_eq!(response.headers().to_string(), "Session: 12345678\nCSeq: 9");
+}
+
+#[test]
+fn with_cseq_ignores_value_that_is_not_a_number() {
+    for cseq in ["", "abc", "1 2", "-1"] {
+        let response = Response::new(Version::V1, StatusCode::Ok).with_cseq(cseq);
+
+        assert_eq!(response.headers().get("CSeq"), None, "CSeq: {cseq:?}");
+    }
+}
+
+#[test]
+fn with_cseq_ignores_value_with_line_break() {
+    let response = Response::new(Version::V1, StatusCode::Ok).with_cseq("1\nX-Injected: yes");
+
+    assert_eq!(response.headers().get("CSeq"), None);
+    assert_eq!(response.headers().get("X-Injected"), None);
+}
+
+#[test]
 fn new_response_encodes_to_status_line_and_empty_head() {
     let response = Response::new(Version::V1, StatusCode::Ok);
 

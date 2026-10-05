@@ -1,4 +1,4 @@
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
 use crate::connection::{ConnectionHandle, ConnectionOptions};
@@ -306,35 +306,68 @@ async fn run_notifies_delegate_about_new_and_closed_connections() {
     );
 }
 
+const DESCRIBE_REQUEST: &str = "DESCRIBE rtsp://example.com/stream1 RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+const OK_RESPONSE: &str = "RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n";
+const NOT_FOUND_RESPONSE: &str = "RTSP/1.0 404 Not Found\r\nCSeq: 1\r\n\r\n";
+
 fn respond_ok(_: &Request) -> Response {
     Response::new(Version::V1, StatusCode::Ok)
 }
 
+async fn exchange(server: &Server, request: &str, response_length: usize) -> String {
+    let mut connection_tasks = tokio::task::JoinSet::new();
+    let (mut client, stream, peer_addr) = accept_client(server).await;
+    server.accept_connection(&mut connection_tasks, stream, peer_addr, &());
+
+    client.write_all(request.as_bytes()).await.expect("client write failed");
+    let mut response = vec![0; response_length];
+    tokio::time::timeout(TEST_TIMEOUT, client.read_exact(&mut response))
+        .await
+        .expect("no response received")
+        .expect("client read failed");
+
+    String::from_utf8(response).expect("response should be UTF-8")
+}
+
 #[tokio::test]
-async fn bind_starts_with_empty_router() {
+async fn bind_answers_requests_with_not_found() {
     let server = Server::bind(localhost_v4()).expect("bind failed");
 
-    assert_eq!(format!("{:?}", server.router), "Router { paths: [] }");
+    let response = exchange(&server, DESCRIBE_REQUEST, NOT_FOUND_RESPONSE.len()).await;
+
+    assert_eq!(response, NOT_FOUND_RESPONSE);
 }
 
 #[tokio::test]
-async fn with_router_uses_given_router() {
-    let router = Router::new();
-    router.register("/stream1", respond_ok);
+async fn with_handler_answers_requests_with_given_handler() {
+    let server = Server::bind(localhost_v4()).expect("bind failed").with_handler(respond_ok);
 
-    let server = Server::bind(localhost_v4()).expect("bind failed").with_router(router);
+    let response = exchange(&server, DESCRIBE_REQUEST, OK_RESPONSE.len()).await;
 
-    assert!(server.router.get("/stream1").is_some());
+    assert_eq!(response, OK_RESPONSE);
 }
 
 #[tokio::test]
-async fn with_router_sees_routes_registered_afterwards() {
+async fn with_handler_sees_routes_registered_on_router_afterwards() {
     let router = Router::new();
-    let server = Server::bind(localhost_v4()).expect("bind failed").with_router(router.clone());
+    let server = Server::bind(localhost_v4()).expect("bind failed").with_handler(router.clone());
 
     router.register("/stream1", respond_ok);
-    router.register("/stream2", respond_ok);
+
+    let response = exchange(&server, DESCRIBE_REQUEST, OK_RESPONSE.len()).await;
+
+    assert_eq!(response, OK_RESPONSE);
+}
+
+#[tokio::test]
+async fn with_handler_sees_routes_unregistered_from_router_afterwards() {
+    let router = Router::new();
+    router.register("/stream1", respond_ok);
+    let server = Server::bind(localhost_v4()).expect("bind failed").with_handler(router.clone());
+
     router.unregister("/stream1");
 
-    assert_eq!(format!("{:?}", server.router), r#"Router { paths: ["/stream2"] }"#);
+    let response = exchange(&server, DESCRIBE_REQUEST, NOT_FOUND_RESPONSE.len()).await;
+
+    assert_eq!(response, NOT_FOUND_RESPONSE);
 }

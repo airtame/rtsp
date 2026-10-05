@@ -6,11 +6,14 @@ Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, b
 > **Status:** early development. The crate currently provides a TCP server that runs each
 > accepted connection in its own task and shuts them all down gracefully when stopped, and a
 > `Client` whose `connect` returns a `ConnectionHandle` and a `ConnectionTask`, a future that
-> drives the connection until it closes. Incoming RTSP requests are answered by a
-> `RequestHandler`: on the server, the one registered for their path in the `Router`
-> (`Server::with_router`), or `404 Not Found`; on the client, the one set with
-> `Client::with_handler` (an empty `Router` by default). The response gets the request's
-> `CSeq`. Either side can send its own requests with `ConnectionHandle::send`, which queues the
+> drives the connection until it closes. Incoming RTSP requests are answered by the
+> `RequestHandler` set with `Server::with_handler` or `Client::with_handler` (an empty `Router`
+> by default). A `Router` passes each request to the handler registered for its path, to its
+> fallback (`Router::with_fallback`) if no path matches, or answers `404 Not Found`. A
+> `MethodRouter` does the same by request method and answers `405 Method Not Allowed` with an
+> `Allow` header. Both are handlers themselves, so a `MethodRouter` can be registered for a path
+> or used as a `Router`'s fallback to handle a method such as `SETUP` on any path. The response
+> gets the request's `CSeq`. Either side can send its own requests with `ConnectionHandle::send`, which queues the
 > request right away and returns a `ResponseFuture` that resolves to the matching response;
 > dropping the future doesn't cancel the request. The connection numbers outgoing requests with
 > its own `CSeq` and matches responses by it. A response that matches no pending request is
@@ -46,15 +49,17 @@ This crate is a library; to run it, use one of the [examples](#examples).
 
 ### `server`
 
-Starts a server with a 60 second connection idle timeout and two routes, showing both kinds of
-handler:
+Starts a server with a 60 second connection idle timeout and a `Router` that shows the ways to
+combine handlers:
 
-- `/stream1`, a type implementing `RequestHandler`, answers `OPTIONS` with its supported
-  methods, `DESCRIBE` with a small SDP description and any other method with
-  `405 Method Not Allowed`.
-- `/health`, a closure, answers every request with `200 OK`.
+- `/stream1` is a `MethodRouter`. A function answers `OPTIONS` with the supported methods, a
+  type implementing `RequestHandler` answers `DESCRIBE` with a small SDP description, and any
+  other method gets `405 Method Not Allowed` with an `Allow` header.
+- `/health`, a closure, answers every request with `200 OK`, whatever its method.
+- The router's fallback is another `MethodRouter`. It answers `OPTIONS` on every other path,
+  including `OPTIONS *`, and its own fallback answers anything else with `404 Not Found`.
 
-Every other path gets `404 Not Found`. It logs each
+It logs each
 connection, every request and response and why the connection closed, and closes all open
 connections on Ctrl+C.
 

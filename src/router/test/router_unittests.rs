@@ -159,7 +159,33 @@ fn debug_lists_registered_paths_in_order() {
     router.register("/stream2", respond_with(StatusCode::Ok));
     router.register("/stream1", respond_with(StatusCode::Ok));
 
-    assert_eq!(format!("{router:?}"), r#"Router { paths: ["/stream1", "/stream2"] }"#);
+    assert_eq!(
+        format!("{router:?}"),
+        r#"Router { paths: ["/stream1", "/stream2"], fallback: false }"#
+    );
+}
+
+#[test]
+fn debug_shows_whether_fallback_is_set() {
+    let router = Router::new().with_fallback(respond_with(StatusCode::Ok));
+
+    assert_eq!(format!("{router:?}"), "Router { paths: [], fallback: true }");
+}
+
+#[test]
+fn get_ignores_fallback() {
+    let router = Router::new().with_fallback(respond_with(StatusCode::Ok));
+
+    assert!(router.get("/stream1").is_none());
+}
+
+#[test]
+fn clones_keep_fallback() {
+    let router = Router::new().with_fallback(respond_with(StatusCode::Ok));
+
+    let response = router.clone().route(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
+
+    assert_eq!(response.status_code(), 200);
 }
 
 fn request_with_headers(start_line: &[u8], header_lines: &str) -> Request {
@@ -215,6 +241,46 @@ fn route_returns_not_found_for_unknown_path() {
 
     assert_eq!(response.status_code(), 404);
     assert_eq!(response.reason_phrase(), "Not Found");
+}
+
+#[test]
+fn route_calls_fallback_for_unknown_path() {
+    let router = Router::new().with_fallback(respond_with(StatusCode::Ok));
+    router.register("/stream1", respond_with(StatusCode::ServiceUnavailable));
+
+    let response = router.route(&request(b"SETUP rtsp://example.com/8279061121985366567 RTSP/1.0"));
+
+    assert_eq!(response.status_code(), 200);
+}
+
+#[test]
+fn route_calls_fallback_for_asterisk_request() {
+    let router = Router::new().with_fallback(respond_with(StatusCode::Ok));
+
+    let response = router.route(&request(b"OPTIONS * RTSP/1.0"));
+
+    assert_eq!(response.status_code(), 200);
+}
+
+#[test]
+fn route_prefers_registered_path_over_fallback() {
+    let router = Router::new().with_fallback(respond_with(StatusCode::Ok));
+    router.register("/stream1", respond_with(StatusCode::ServiceUnavailable));
+
+    let response = router.route(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
+
+    assert_eq!(response.status_code(), 503);
+}
+
+#[test]
+fn route_calls_fallback_after_path_is_unregistered() {
+    let router = Router::new().with_fallback(respond_with(StatusCode::Ok));
+    router.register("/stream1", respond_with(StatusCode::ServiceUnavailable));
+
+    router.unregister("/stream1");
+    let response = router.route(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
+
+    assert_eq!(response.status_code(), 200);
 }
 
 #[test]

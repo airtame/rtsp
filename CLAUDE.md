@@ -41,7 +41,7 @@ printf 'DESCRIBE rtsp://127.0.0.1:8554/stream1 RTSP/1.0\r\nCSeq: 1\r\n\r\n' | nc
 
 **Delegate callbacks run inline in the server's `select!` loop**, so they must not block.
 
-**Idle timeout.** The timer resets on every decoded frame, including malformed ones. Partial bytes don't reset it.
+**Idle timeout and activity hook.** The idle timer resets on every decoded frame, including malformed ones. Partial bytes don't reset it. The activity hook from `ConnectionOptions` is called with the peer address at the same point. It runs inline in the connection task, so it must not block.
 
 **Two-tier error handling in `MessageCodec`.** `Decoder::Item` is `Result<Message, MalformedMessage>` and `Decoder::Error` is `MessageError`:
 - **Bad start line, framing still known.** The decoder yields `Ok(Some(Err(MalformedMessage)))`. The connection replies `400` (echoing `CSeq` if it is numeric) and keeps reading.

@@ -59,6 +59,9 @@ impl Connection {
                             if let Some(idle_timeout) = self.options.idle_timeout() {
                                 idle_timer.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                             }
+                            if let Some(activity_hook) = self.options.activity_hook() {
+                                activity_hook(self.peer_addr);
+                            }
 
                             match decoded {
                                 Ok(Message::Request(request)) => {
@@ -105,6 +108,16 @@ impl Connection {
         }
 
         self.framed_tcp_stream.send(Message::Response(response)).await
+    }
+}
+
+impl std::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connection")
+            .field("peer_addr", &self.peer_addr)
+            .field("options", &self.options)
+            .field("router", &self.router)
+            .finish_non_exhaustive()
     }
 }
 

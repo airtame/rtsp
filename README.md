@@ -18,7 +18,8 @@ Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, b
 > sets the `ParsingMode`. In `Strict` mode (the default) messages must use RTSP/1.0 or RTSP/2.0
 > and requests must carry `CSeq`; anything else is answered with `400 Bad Request` and the
 > connection keeps going. `Lenient` mode also accepts other versions such as `HTTP/1.1`, and
-> requests without `CSeq`.
+> requests without `CSeq`. An optional activity hook (`ConnectionOptions::with_activity_hook`)
+> is called with the peer address each time a complete message arrives.
 
 ## Building, running and testing
 

@@ -81,8 +81,6 @@ impl Server {
         addr: std::net::SocketAddr,
         delegate: &D,
     ) {
-        log::debug!("[rtsp] new connection from {addr}");
-
         let (connection, connection_handle) = Connection::new(
             stream,
             addr,
@@ -90,6 +88,7 @@ impl Server {
             self.router.clone(),
             delegate.connection_options(addr),
         );
+        log::debug!("[rtsp] new connection: {connection:?}");
 
         delegate.on_new_connection(connection_handle);
 

@@ -80,15 +80,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rtsp::Response::new(request.version().clone(), rtsp::StatusCode::Ok)
     });
 
-    let server = rtsp::Server::bind(addr)?
+    let server = rtsp::Server::new()
         .with_handler(router)
         .with_delegate(PrintingDelegate)
         .with_connection_options(
             rtsp::ConnectionOptions::new().with_idle_timeout(DEFAULT_CONNECTION_IDLE_TIMEOUT),
         );
-    println!("RTSP server listening on rtsp://{addr}, press Ctrl+C to stop");
 
-    let (handle, task) = server.run();
+    let (handle, task) = server.bind(addr)?;
+    println!("RTSP server listening on rtsp://{}, press Ctrl+C to stop", handle.local_addr());
+
     let task = tokio::spawn(task);
 
     tokio::signal::ctrl_c().await?;

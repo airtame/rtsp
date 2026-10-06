@@ -3,7 +3,7 @@
 Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, built on
 [Tokio](https://tokio.rs).
 
-> **Status:** early development. The crate currently provides a `Server` whose `run` returns a
+> **Status:** early development. The crate currently provides a `Server` whose `bind` returns a
 > `ServerHandle` and a `ServerTask`, a future that accepts TCP connections, runs each one in its
 > own task and shuts them all down gracefully when `ServerHandle::stop` is called, and a
 > `Client` whose `connect` returns a `ConnectionHandle` and a `ConnectionTask`, a future that

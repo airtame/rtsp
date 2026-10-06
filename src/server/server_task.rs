@@ -1,4 +1,4 @@
-use crate::server::Server;
+use crate::server::ServerLoop;
 
 type ServerFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
@@ -7,8 +7,8 @@ pub struct ServerTask {
 }
 
 impl ServerTask {
-    pub(crate) fn new(server: Server) -> Self {
-        Self { future: Box::pin(server.run_loop()) }
+    pub(crate) fn new(server_loop: ServerLoop) -> Self {
+        Self { future: Box::pin(server_loop.run()) }
     }
 }
 

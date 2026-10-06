@@ -1,11 +1,19 @@
 #[derive(Clone, Debug)]
 pub struct ServerHandle {
+    local_addr: std::net::SocketAddr,
     cancellation_token: tokio_util::sync::CancellationToken,
 }
 
 impl ServerHandle {
-    pub(crate) fn new(cancellation_token: tokio_util::sync::CancellationToken) -> Self {
-        Self { cancellation_token }
+    pub(crate) fn new(
+        local_addr: std::net::SocketAddr,
+        cancellation_token: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        Self { local_addr, cancellation_token }
+    }
+
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.local_addr
     }
 
     pub fn stop(&self) {

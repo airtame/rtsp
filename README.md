@@ -24,8 +24,7 @@ Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, b
 > disconnects, the server stops, a message arrives whose end can't be determined (invalid
 > headers or `Content-Length`, answered with `400 Bad Request` before closing), no complete
 > message arrives within the optional idle timeout (`ConnectionOptions::with_idle_timeout`,
-> returned for each new connection by `ServerDelegate::connection_options` or set with
-> `Client::with_connection_options`), or the embedder closes it through its `ConnectionHandle`
+> set with `Server::with_connection_options` or `Client::with_connection_options`), or the embedder closes it through its `ConnectionHandle`
 > (passed to `ServerDelegate::on_new_connection`, or returned by `Client::connect`). `ConnectionOptions` also
 > sets the `ParsingMode`. In `Strict` mode (the default) messages must use RTSP/1.0 or RTSP/2.0
 > and requests must carry `CSeq`; anything else is answered with `400 Bad Request` and the

@@ -23,19 +23,12 @@ async fn run_until_stopped(server: &Server, delegate: &impl ServerDelegate) {
 /// Records every delegate call, and optionally closes each new connection right away.
 #[derive(Default)]
 struct RecordingDelegate {
-    connection_options: ConnectionOptions,
     close_new_connections: bool,
-    connection_options_requests: std::sync::Mutex<Vec<std::net::SocketAddr>>,
     new_connections: std::sync::Mutex<Vec<ConnectionHandle>>,
     closed_connections: std::sync::Mutex<Vec<(std::net::SocketAddr, ConnectionCloseReason)>>,
 }
 
 impl ServerDelegate for RecordingDelegate {
-    fn connection_options(&self, peer_addr: std::net::SocketAddr) -> ConnectionOptions {
-        self.connection_options_requests.lock().unwrap().push(peer_addr);
-        self.connection_options.clone()
-    }
-
     fn on_new_connection(&self, connection: ConnectionHandle) {
         if self.close_new_connections {
             connection.close();
@@ -201,30 +194,14 @@ async fn stop_cancels_and_closes_accepted_connections() {
 }
 
 #[tokio::test]
-async fn accept_connection_requests_connection_options_for_peer() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
-    let delegate = RecordingDelegate::default();
-    let mut connection_tasks = tokio::task::JoinSet::new();
-    let (client, stream, peer_addr) = accept_client(&server).await;
-
-    server.accept_connection(&mut connection_tasks, stream, peer_addr, &delegate);
-
-    let connection_options_requests = delegate.connection_options_requests.lock().unwrap();
-    assert_eq!(*connection_options_requests, vec![client.local_addr().unwrap()]);
-}
-
-#[tokio::test]
-async fn accept_connection_applies_connection_options_from_delegate() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
-    let delegate = RecordingDelegate {
-        connection_options: ConnectionOptions::new()
-            .with_idle_timeout(std::time::Duration::from_millis(100)),
-        ..Default::default()
-    };
+async fn with_connection_options_applies_options_to_accepted_connections() {
+    let server = Server::bind(localhost_v4()).expect("bind failed").with_connection_options(
+        ConnectionOptions::new().with_idle_timeout(std::time::Duration::from_millis(100)),
+    );
     let mut connection_tasks = tokio::task::JoinSet::new();
     let (_client, stream, peer_addr) = accept_client(&server).await;
 
-    server.accept_connection(&mut connection_tasks, stream, peer_addr, &delegate);
+    server.accept_connection(&mut connection_tasks, stream, peer_addr, &());
 
     let (_, reason) = join_next_connection(&mut connection_tasks).await;
     assert!(matches!(reason, ConnectionCloseReason::IdleTimeout), "unexpected reason: {reason:?}");

@@ -86,15 +86,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_connection_options(
             rtsp::ConnectionOptions::new().with_idle_timeout(DEFAULT_CONNECTION_IDLE_TIMEOUT),
         );
-    let handle = server.handle();
     println!("RTSP server listening on rtsp://{addr}, press Ctrl+C to stop");
 
-    let run = tokio::spawn(server.run());
+    let (handle, task) = server.run();
+    let task = tokio::spawn(task);
 
     tokio::signal::ctrl_c().await?;
     println!("Stopping RTSP server and closing open connections");
     handle.stop();
-    run.await?;
+    task.await?;
 
     println!("RTSP server stopped");
 

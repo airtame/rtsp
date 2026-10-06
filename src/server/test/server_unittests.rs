@@ -14,8 +14,8 @@ fn localhost_v6() -> std::net::SocketAddr {
     std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, 0))
 }
 
-async fn run_until_stopped(server: Server) {
-    tokio::time::timeout(TEST_TIMEOUT, server.run())
+async fn run_until_stopped(task: ServerTask) {
+    tokio::time::timeout(TEST_TIMEOUT, task)
         .await
         .expect("server run loop did not exit after stop");
 }
@@ -105,55 +105,38 @@ async fn bind_fails_when_address_in_use() {
 }
 
 #[tokio::test]
-async fn run_returns_after_stop() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
-    let handle = server.handle();
+async fn run_task_returns_after_stop() {
+    let (handle, task) = Server::bind(localhost_v4()).expect("bind failed").run();
 
-    tokio::join!(run_until_stopped(server), async { handle.stop() });
+    tokio::join!(run_until_stopped(task), async { handle.stop() });
 }
 
 #[tokio::test]
-async fn run_returns_immediately_when_stopped_before_run() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
+async fn run_task_returns_immediately_when_stopped_before_awaited() {
+    let (handle, task) = Server::bind(localhost_v4()).expect("bind failed").run();
 
-    server.handle().stop();
+    handle.stop();
 
-    run_until_stopped(server).await;
+    run_until_stopped(task).await;
 }
 
 #[tokio::test]
 async fn stop_is_idempotent() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
-    let handle = server.handle();
+    let (handle, task) = Server::bind(localhost_v4()).expect("bind failed").run();
 
     handle.stop();
     handle.stop();
 
-    run_until_stopped(server).await;
+    run_until_stopped(task).await;
 }
 
 #[tokio::test]
-async fn run_can_be_stopped_from_another_task() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
-    let handle = server.handle();
-
-    let run = tokio::spawn(server.run());
-
-    handle.stop();
-
-    tokio::time::timeout(TEST_TIMEOUT, run)
-        .await
-        .expect("server run loop did not exit after stop")
-        .expect("server run task panicked");
-}
-
-#[tokio::test]
-async fn run_returns_after_stop_with_open_connections() {
+async fn run_task_returns_after_stop_with_open_connections() {
     let server = Server::bind(localhost_v4()).expect("bind failed");
     let addr = server.listener.local_addr().unwrap();
-    let handle = server.handle();
+    let (handle, task) = server.run();
 
-    let (_, _clients) = tokio::join!(run_until_stopped(server), async {
+    let (_, _clients) = tokio::join!(run_until_stopped(task), async {
         let mut clients = Vec::new();
         for _ in 0..3 {
             clients
@@ -168,7 +151,7 @@ async fn run_returns_after_stop_with_open_connections() {
 async fn next_event_returns_cancelled_after_stop() {
     let mut server = Server::bind(localhost_v4()).expect("bind failed");
 
-    server.handle().stop();
+    server.cancellation_token.cancel();
 
     let event = next_event(&mut server).await;
     assert!(matches!(event, ServerEvent::Cancelled), "unexpected event: {event:?}");
@@ -224,12 +207,12 @@ async fn accept_connection_reports_peer_address_and_close_reason() {
 }
 
 #[tokio::test]
-async fn stop_cancels_and_closes_accepted_connections() {
+async fn cancelling_server_closes_accepted_connections() {
     let mut server = Server::bind(localhost_v4()).expect("bind failed");
     let (mut client, stream, peer_addr) = accept_client(&server).await;
 
     server.accept_connection(stream, peer_addr);
-    server.handle().stop();
+    server.cancellation_token.cancel();
 
     let (_, reason) = join_next_connection(&mut server).await;
     assert!(matches!(reason, ConnectionCloseReason::Cancelled), "unexpected reason: {reason:?}");
@@ -301,9 +284,9 @@ async fn run_notifies_delegate_about_new_and_closed_connections() {
     let delegate = RecordingDelegate { close_new_connections: true, ..Default::default() };
     let server = Server::bind(localhost_v4()).expect("bind failed").with_delegate(delegate.clone());
     let addr = server.listener.local_addr().unwrap();
-    let handle = server.handle();
+    let (handle, task) = server.run();
 
-    let (_, client_addr) = tokio::join!(run_until_stopped(server), async {
+    let (_, client_addr) = tokio::join!(run_until_stopped(task), async {
         let mut client = tokio::net::TcpStream::connect(addr).await.expect("client connect failed");
 
         // The delegate closes every new connection, so EOF means the run loop accepted it.

@@ -1,6 +1,6 @@
 use crate::connection::{Connection, ConnectionCloseReason, ConnectionOptions};
 use crate::router::{RequestHandler, Router};
-use crate::server::{ServerDelegate, ServerEvent, ServerHandle};
+use crate::server::{ServerDelegate, ServerEvent, ServerHandle, ServerTask};
 
 const MAX_CONNECTION_BACKLOG: u32 = 1024;
 
@@ -52,11 +52,11 @@ impl Server {
         self
     }
 
-    pub fn handle(&self) -> ServerHandle {
-        ServerHandle::new(self.cancellation_token.clone())
+    pub fn run(self) -> (ServerHandle, ServerTask) {
+        (ServerHandle::new(self.cancellation_token.clone()), ServerTask::new(self))
     }
 
-    pub async fn run(mut self) {
+    pub(crate) async fn run_loop(mut self) {
         log::debug!("[rtsp] server run loop started");
 
         loop {
@@ -78,6 +78,7 @@ impl Server {
         }
 
         while let Some(closed_connection) = self.connection_tasks.join_next().await {
+            log::debug!("[rtsp] server stopping, connection closed: {closed_connection:?}");
             self.on_connection_closed(closed_connection);
         }
 
@@ -86,7 +87,7 @@ impl Server {
 
     async fn next_event(&mut self) -> ServerEvent {
         tokio::select! {
-            _ = self.cancellation_token.cancelled() => ServerEvent::Cancelled,
+            () = self.cancellation_token.cancelled() => ServerEvent::Cancelled,
             accepted = self.listener.accept() => match accepted {
                 Ok((stream, addr)) => ServerEvent::ConnectionAccepted(stream, addr),
                 Err(err) => ServerEvent::AcceptFailed(err),

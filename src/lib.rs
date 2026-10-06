@@ -14,4 +14,4 @@ pub use message::{
     Version,
 };
 pub use router::{MethodRouter, RequestHandler, Router};
-pub use server::{Server, ServerDelegate, ServerHandle};
+pub use server::{Server, ServerDelegate, ServerHandle, ServerTask};

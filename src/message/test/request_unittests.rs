@@ -203,6 +203,99 @@ fn parse_rejects_other_protocol_version_in_strict_mode() {
 }
 
 #[test]
+fn new_sets_method_uri_and_version() {
+    let request = Request::new(RequestMethod::Describe, "rtsp://example.com/stream", Version::V2);
+
+    assert_eq!(request.method(), &RequestMethod::Describe);
+    assert_eq!(request.uri(), "rtsp://example.com/stream");
+    assert_eq!(request.version(), &Version::V2);
+}
+
+#[test]
+fn new_splits_path_and_query_from_uri() {
+    let request =
+        Request::new(RequestMethod::Play, "rtsp://example.com/stream?track=1", Version::V1);
+
+    assert_eq!(request.path(), "/stream");
+    assert_eq!(request.query(), Some("track=1"));
+}
+
+#[test]
+fn new_has_no_headers_or_body() {
+    let request = Request::new(RequestMethod::Options, "*", Version::V1);
+
+    assert!(request.headers().is_empty());
+    assert!(request.body().is_empty());
+}
+
+#[test]
+#[should_panic(expected = "invalid request URI")]
+fn new_rejects_empty_uri() {
+    Request::new(RequestMethod::Options, "", Version::V1);
+}
+
+#[test]
+#[should_panic(expected = "invalid request URI")]
+fn new_rejects_whitespace_in_uri() {
+    Request::new(RequestMethod::Describe, "rtsp://example.com/my stream", Version::V1);
+}
+
+#[test]
+#[should_panic(expected = "invalid request URI")]
+fn new_rejects_line_break_in_uri() {
+    Request::new(RequestMethod::Describe, "rtsp://example.com/\r\nX-Injected: yes", Version::V1);
+}
+
+#[test]
+fn with_header_adds_headers_in_order() {
+    let request = Request::new(RequestMethod::Options, "*", Version::V1)
+        .with_header("Require", "implicit-play")
+        .with_header("User-Agent", "rtsp");
+
+    assert_eq!(request.headers().to_string(), "Require: implicit-play\nUser-Agent: rtsp");
+}
+
+#[test]
+fn with_body_replaces_previous_body() {
+    let request = Request::new(RequestMethod::Announce, "rtsp://example.com/stream", Version::V1)
+        .with_body("first")
+        .with_body("second");
+
+    assert_eq!(request.body(), b"second");
+}
+
+#[test]
+fn with_cseq_replaces_cseq_in_any_case_and_moves_it_last() {
+    let request = Request::new(RequestMethod::Options, "*", Version::V1)
+        .with_header("cseq", "99")
+        .with_header("Session", "12345678")
+        .with_cseq(1);
+
+    assert_eq!(request.headers().to_string(), "Session: 12345678\nCSeq: 1");
+}
+
+#[test]
+fn created_request_encodes_to_request_line_headers_and_body() {
+    let request = Request::new(RequestMethod::Announce, "rtsp://example.com/stream", Version::V1)
+        .with_header("Content-Type", "application/sdp")
+        .with_body("v=0\r\n")
+        .with_cseq(3);
+    let mut dst = tokio_util::bytes::BytesMut::new();
+
+    request.encode(&mut dst);
+
+    assert_eq!(
+        &dst[..],
+        b"ANNOUNCE rtsp://example.com/stream RTSP/1.0\r\n\
+          Content-Type: application/sdp\r\n\
+          CSeq: 3\r\n\
+          Content-Length: 5\r\n\
+          \r\n\
+          v=0\r\n"
+    );
+}
+
+#[test]
 fn parse_uri_strips_scheme_and_host() {
     assert_eq!(
         Request::parse_uri("rtsp://example.com:554/live/stream"),

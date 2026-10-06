@@ -2,7 +2,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
 use crate::connection::ConnectionCloseReason;
-use crate::message::{ParsingMode, Request, Response, StatusCode, Version};
+use crate::message::{ParsingMode, Request, RequestMethod, Response, StatusCode, Version};
 
 const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -172,4 +172,36 @@ async fn task_applies_connection_options() {
     let reason = run_until_closed(task).await;
 
     assert!(matches!(reason, ConnectionCloseReason::IdleTimeout), "unexpected reason: {reason:?}");
+}
+
+async fn read_request(server: &mut tokio::net::TcpStream, length: usize) -> String {
+    read_response(server, length).await
+}
+
+#[tokio::test]
+async fn handle_sends_request_to_server_and_returns_response() {
+    let TestConnection { mut server, handle, task } = connect(&Client::new()).await;
+    let expected_request = "DESCRIBE rtsp://example.com/stream RTSP/1.0\r\nCSeq: 1\r\n\r\n";
+
+    let (_, response, request) = tokio::join!(
+        run_until_closed(task),
+        async {
+            let request =
+                Request::new(RequestMethod::Describe, "rtsp://example.com/stream", Version::V1);
+            let response = handle.send(request).await;
+            handle.close();
+            response
+        },
+        async {
+            let request = read_request(&mut server, expected_request.len()).await;
+            server
+                .write_all(b"RTSP/1.0 200 OK\r\nCSeq: 1\r\nContent-Length: 5\r\n\r\nv=0\r\n")
+                .await
+                .expect("server write failed");
+            request
+        }
+    );
+
+    assert_eq!(request, expected_request);
+    assert_eq!(response.expect("send should succeed").body(), b"v=0\r\n");
 }

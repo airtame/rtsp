@@ -1,7 +1,7 @@
 use tokio_util::codec::{Decoder, Encoder};
 
 use super::*;
-use crate::message::{Request, RequestMethod, Response, Version};
+use crate::message::{Request, RequestMethod, Response, StatusCode, Version};
 
 const OPTIONS_REQUEST: &[u8] = b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n";
 
@@ -295,8 +295,7 @@ fn decode_parses_whole_response_with_body() {
     let response = decode_response(&mut src);
 
     assert_eq!(response.version(), &Version::V1);
-    assert_eq!(response.status_code(), 200);
-    assert_eq!(response.reason_phrase(), "OK");
+    assert_eq!(response.status_code(), &StatusCode::Ok);
     assert_eq!(response.headers().get("CSeq"), Some("2"));
     assert_eq!(response.headers().get("Content-Type"), Some("application/sdp"));
     assert_eq!(response.body(), b"v=0\r\ns=Test\r\n");
@@ -304,12 +303,14 @@ fn decode_parses_whole_response_with_body() {
 
 #[test]
 fn decode_parses_whole_response_with_reason_phrase_containing_spaces() {
-    let mut src = buffer(b"RTSP/1.0 454 Session Not Found\r\nCSeq: 4\r\n\r\n");
+    let mut src = buffer(b"RTSP/1.0 299 Partly Done For Now\r\nCSeq: 4\r\n\r\n");
 
     let response = decode_response(&mut src);
 
-    assert_eq!(response.status_code(), 454);
-    assert_eq!(response.reason_phrase(), "Session Not Found");
+    assert_eq!(
+        response.status_code(),
+        &StatusCode::Extension(299, "Partly Done For Now".to_owned())
+    );
     assert_eq!(response.headers().get("CSeq"), Some("4"));
 }
 
@@ -325,7 +326,7 @@ fn decode_parses_each_pipelined_message_from_its_own_start_line() {
     assert_eq!(setup.headers().get("CSeq"), Some("5"));
 
     let response = decode_response(&mut src);
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
     assert_eq!(response.headers().get("CSeq"), Some("6"));
     assert_eq!(response.body(), b"hi");
 

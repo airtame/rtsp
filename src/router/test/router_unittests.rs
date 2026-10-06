@@ -8,13 +8,13 @@ fn request(start_line: &[u8]) -> Request {
 }
 
 fn respond_with(status_code: StatusCode) -> impl RequestHandler {
-    move |_: &Request| Response::new(Version::V1, status_code)
+    move |_: &Request| Response::new(Version::V1, status_code.clone())
 }
 
 fn status_code(router: &Router, path: &str) -> Option<u16> {
     let handler = router.get(path)?;
 
-    Some(handler.handle(&request(b"OPTIONS * RTSP/1.0")).status_code())
+    Some(handler.handle(&request(b"OPTIONS * RTSP/1.0")).status_code().code())
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn register_replaces_and_returns_previous_handler() {
         .register("/stream1", respond_with(StatusCode::ServiceUnavailable))
         .expect("a handler was already registered");
 
-    assert_eq!(previous.handle(&request(b"OPTIONS * RTSP/1.0")).status_code(), 200);
+    assert_eq!(previous.handle(&request(b"OPTIONS * RTSP/1.0")).status_code(), &StatusCode::Ok);
     assert_eq!(status_code(&router, "/stream1"), Some(503));
 }
 
@@ -63,7 +63,7 @@ fn unregister_removes_and_returns_handler() {
 
     let removed = router.unregister("/stream1").expect("a handler was registered");
 
-    assert_eq!(removed.handle(&request(b"OPTIONS * RTSP/1.0")).status_code(), 200);
+    assert_eq!(removed.handle(&request(b"OPTIONS * RTSP/1.0")).status_code(), &StatusCode::Ok);
     assert_eq!(status_code(&router, "/stream1"), None);
     assert_eq!(status_code(&router, "/stream2"), Some(200));
 }
@@ -99,8 +99,8 @@ fn closure_handler_receives_request() {
     let describe = request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0");
     let record = request(b"RECORD rtsp://example.com/stream1 RTSP/1.0");
 
-    assert_eq!(handler.handle(&describe).status_code(), 200);
-    assert_eq!(handler.handle(&record).status_code(), 405);
+    assert_eq!(handler.handle(&describe).status_code(), &StatusCode::Ok);
+    assert_eq!(handler.handle(&record).status_code(), &StatusCode::MethodNotAllowed);
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn clones_keep_fallback() {
 
     let response = router.clone().route(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
 }
 
 fn request_with_headers(start_line: &[u8], header_lines: &str) -> Request {
@@ -204,7 +204,7 @@ fn route_calls_handler_registered_for_request_path() {
 
     let response = router.route(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
 }
 
 #[test]
@@ -218,8 +218,8 @@ fn route_passes_request_to_handler() {
     let play = router.route(&request(b"PLAY rtsp://example.com/stream1 RTSP/1.0"));
     let record = router.route(&request(b"RECORD rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(play.status_code(), 200);
-    assert_eq!(record.status_code(), 405);
+    assert_eq!(play.status_code(), &StatusCode::Ok);
+    assert_eq!(record.status_code(), &StatusCode::MethodNotAllowed);
 }
 
 #[test]
@@ -229,7 +229,7 @@ fn route_ignores_query_when_matching_path() {
 
     let response = router.route(&request(b"PLAY rtsp://example.com/stream1?track=1 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
 }
 
 #[test]
@@ -239,8 +239,7 @@ fn route_returns_not_found_for_unknown_path() {
 
     let response = router.route(&request(b"DESCRIBE rtsp://example.com/stream2 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 404);
-    assert_eq!(response.reason_phrase(), "Not Found");
+    assert_eq!(response.status_code(), &StatusCode::NotFound);
 }
 
 #[test]
@@ -250,7 +249,7 @@ fn route_calls_fallback_for_unknown_path() {
 
     let response = router.route(&request(b"SETUP rtsp://example.com/8279061121985366567 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
 }
 
 #[test]
@@ -259,7 +258,7 @@ fn route_calls_fallback_for_asterisk_request() {
 
     let response = router.route(&request(b"OPTIONS * RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
 }
 
 #[test]
@@ -269,7 +268,7 @@ fn route_prefers_registered_path_over_fallback() {
 
     let response = router.route(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 503);
+    assert_eq!(response.status_code(), &StatusCode::ServiceUnavailable);
 }
 
 #[test]
@@ -280,14 +279,14 @@ fn route_calls_fallback_after_path_is_unregistered() {
     router.unregister("/stream1");
     let response = router.route(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
 }
 
 #[test]
 fn route_returns_not_found_without_handlers() {
     let response = Router::new().route(&request(b"OPTIONS * RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 404);
+    assert_eq!(response.status_code(), &StatusCode::NotFound);
 }
 
 #[test]
@@ -320,6 +319,6 @@ fn handle_routes_request_like_route() {
     let found = router.handle(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
     let not_found = router.handle(&request(b"DESCRIBE rtsp://example.com/stream2 RTSP/1.0"));
 
-    assert_eq!(found.status_code(), 200);
-    assert_eq!(not_found.status_code(), 404);
+    assert_eq!(found.status_code(), &StatusCode::Ok);
+    assert_eq!(not_found.status_code(), &StatusCode::NotFound);
 }

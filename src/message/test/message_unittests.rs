@@ -171,9 +171,9 @@ fn display_prints_reason_phrase_with_spaces() {
 
 #[test]
 fn display_omits_missing_reason_phrase() {
-    let message = message(b"RTSP/1.0 200", "", b"");
+    let message = message(b"RTSP/1.0 299", "", b"");
 
-    assert_eq!(message.to_string(), "RTSP/1.0 200");
+    assert_eq!(message.to_string(), "RTSP/1.0 299");
 }
 
 #[test]
@@ -311,9 +311,9 @@ fn encode_writes_reason_phrase_with_spaces() {
 #[test]
 fn encode_keeps_space_before_missing_reason_phrase() {
     // The status line grammar requires the space even when the reason phrase is empty.
-    let message = message(b"RTSP/1.0 200", "", b"");
+    let message = message(b"RTSP/1.0 299", "", b"");
 
-    assert_eq!(encode(&message), "RTSP/1.0 200 \r\n\r\n");
+    assert_eq!(encode(&message), "RTSP/1.0 299 \r\n\r\n");
 }
 
 #[test]

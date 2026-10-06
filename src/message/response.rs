@@ -5,26 +5,25 @@ const CSEQ: &str = "CSeq";
 #[derive(Debug)]
 pub struct Response {
     version: Version,
-    status_code: u16,
-    reason_phrase: String,
+    status_code: StatusCode,
     headers: MessageHeaders,
     body: tokio_util::bytes::Bytes,
 }
 
 impl Response {
     pub fn new(version: Version, status_code: StatusCode) -> Self {
+        assert!(
+            !status_code.reason_phrase().contains(['\r', '\n']),
+            "invalid reason phrase: {:?}",
+            status_code.reason_phrase()
+        );
+
         Self {
             version,
-            status_code: status_code.code(),
-            reason_phrase: status_code.reason_phrase().to_owned(),
+            status_code,
             headers: MessageHeaders::default(),
             body: tokio_util::bytes::Bytes::new(),
         }
-    }
-
-    pub fn with_reason_phrase(mut self, reason_phrase: impl Into<String>) -> Self {
-        self.reason_phrase = reason_phrase.into();
-        self
     }
 
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
@@ -73,27 +72,19 @@ impl Response {
         if status_code.len() != 3 || !status_code.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(invalid_status_line());
         }
-        let status_code = status_code.parse().map_err(|_| invalid_status_line())?;
+        let code = status_code.parse::<u16>().map_err(|_| invalid_status_line())?;
+        let status_code = StatusCode::try_from(code)
+            .unwrap_or_else(|code| StatusCode::Extension(code, reason_phrase.trim().to_owned()));
 
-        Ok(Self {
-            version,
-            status_code,
-            reason_phrase: reason_phrase.trim().to_owned(),
-            headers,
-            body,
-        })
+        Ok(Self { version, status_code, headers, body })
     }
 
     pub fn version(&self) -> &Version {
         &self.version
     }
 
-    pub fn status_code(&self) -> u16 {
-        self.status_code
-    }
-
-    pub fn reason_phrase(&self) -> &str {
-        &self.reason_phrase
+    pub fn status_code(&self) -> &StatusCode {
+        &self.status_code
     }
 
     pub fn headers(&self) -> &MessageHeaders {
@@ -110,8 +101,14 @@ impl Response {
     pub(crate) fn encode(&self, dst: &mut tokio_util::bytes::BytesMut) {
         use std::fmt::Write as _;
 
-        write!(dst, "{} {:03} {}\r\n", self.version, self.status_code, self.reason_phrase)
-            .expect("writing to BytesMut can't fail");
+        write!(
+            dst,
+            "{} {:03} {}\r\n",
+            self.version,
+            self.status_code.code(),
+            self.status_code.reason_phrase()
+        )
+        .expect("writing to BytesMut can't fail");
 
         self.headers.encode(self.body.len(), dst);
         dst.extend_from_slice(b"\r\n");
@@ -121,9 +118,10 @@ impl Response {
 
 impl std::fmt::Display for Response {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {:03}", self.version, self.status_code)?;
-        if !self.reason_phrase.is_empty() {
-            write!(f, " {}", self.reason_phrase.escape_debug())?;
+        let reason_phrase = self.status_code.reason_phrase();
+        write!(f, "{} {:03}", self.version, self.status_code.code())?;
+        if !reason_phrase.is_empty() {
+            write!(f, " {}", reason_phrase.escape_debug())?;
         }
         if !self.headers.is_empty() {
             write!(f, "\n{}", self.headers)?;

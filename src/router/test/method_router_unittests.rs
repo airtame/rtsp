@@ -13,7 +13,7 @@ fn request(start_line: &[u8]) -> Request {
 }
 
 fn respond_with(status_code: StatusCode) -> impl RequestHandler {
-    move |_: &Request| Response::new(Version::V1, status_code)
+    move |_: &Request| Response::new(Version::V1, status_code.clone())
 }
 
 fn extension(method: &str) -> RequestMethod {
@@ -29,8 +29,8 @@ fn handle_calls_handler_registered_for_request_method() {
     let setup = router.handle(&request(b"SETUP rtsp://example.com/stream1 RTSP/1.0"));
     let teardown = router.handle(&request(b"TEARDOWN rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(setup.status_code(), 200);
-    assert_eq!(teardown.status_code(), 503);
+    assert_eq!(setup.status_code(), &StatusCode::Ok);
+    assert_eq!(teardown.status_code(), &StatusCode::ServiceUnavailable);
 }
 
 #[test]
@@ -42,8 +42,8 @@ fn handle_matches_extension_methods() {
     let get = router.handle(&request(b"GET /info RTSP/1.0"));
     let post = router.handle(&request(b"POST /info RTSP/1.0"));
 
-    assert_eq!(get.status_code(), 200);
-    assert_eq!(post.status_code(), 503);
+    assert_eq!(get.status_code(), &StatusCode::Ok);
+    assert_eq!(post.status_code(), &StatusCode::ServiceUnavailable);
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn handle_ignores_request_path() {
     let response =
         router.handle(&request(b"SETUP rtsp://example.com/8279061121985366567 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
 }
 
 #[test]
@@ -65,7 +65,7 @@ fn with_method_replaces_handler_for_same_method() {
 
     let response = router.handle(&request(b"PLAY rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
 }
 
 #[test]
@@ -76,8 +76,7 @@ fn handle_answers_unregistered_method_with_method_not_allowed() {
 
     let response = router.handle(&request(b"RECORD rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 405);
-    assert_eq!(response.reason_phrase(), "Method Not Allowed");
+    assert_eq!(response.status_code(), &StatusCode::MethodNotAllowed);
     assert_eq!(response.headers().get("Allow"), Some("DESCRIBE, PLAY"));
 }
 
@@ -96,7 +95,7 @@ fn handle_answers_method_not_allowed_with_request_version() {
 fn new_method_router_answers_with_empty_allow() {
     let response = MethodRouter::new().handle(&request(b"OPTIONS * RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 405);
+    assert_eq!(response.status_code(), &StatusCode::MethodNotAllowed);
     assert_eq!(response.headers().get("Allow"), Some(""));
 }
 
@@ -108,7 +107,7 @@ fn handle_calls_fallback_for_unregistered_method() {
 
     let response = router.handle(&request(b"RECORD rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
 }
 
 #[test]
@@ -119,7 +118,7 @@ fn handle_prefers_registered_method_over_fallback() {
 
     let response = router.handle(&request(b"PLAY rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(response.status_code(), 503);
+    assert_eq!(response.status_code(), &StatusCode::ServiceUnavailable);
 }
 
 #[test]
@@ -148,9 +147,9 @@ fn router_fallback_dispatches_unknown_paths_by_method() {
     let setup = router.handle(&request(b"SETUP rtsp://example.com/8279061121985366567 RTSP/1.0"));
     let other = router.handle(&request(b"POST /unknown RTSP/1.0"));
 
-    assert_eq!(info.status_code(), 201);
-    assert_eq!(setup.status_code(), 200);
-    assert_eq!(other.status_code(), 503);
+    assert_eq!(info.status_code(), &StatusCode::Created);
+    assert_eq!(setup.status_code(), &StatusCode::Ok);
+    assert_eq!(other.status_code(), &StatusCode::ServiceUnavailable);
 }
 
 #[test]
@@ -164,6 +163,6 @@ fn method_router_can_be_registered_for_a_path() {
     let describe = router.handle(&request(b"DESCRIBE rtsp://example.com/stream1 RTSP/1.0"));
     let record = router.handle(&request(b"RECORD rtsp://example.com/stream1 RTSP/1.0"));
 
-    assert_eq!(describe.status_code(), 200);
-    assert_eq!(record.status_code(), 405);
+    assert_eq!(describe.status_code(), &StatusCode::Ok);
+    assert_eq!(record.status_code(), &StatusCode::MethodNotAllowed);
 }

@@ -81,7 +81,7 @@ Known gaps in the codec (no limit on header size or `Content-Length`, and EOF in
 - External types are written with fully qualified paths (`std::net::SocketAddr`, `tokio_util::sync::CancellationToken`, `tokio_util::bytes::Bytes`) instead of being imported. `use` is reserved for `crate::` items and extension traits (`SinkExt`, `StreamExt`, `std::fmt::Write as _`).
 - Optional configuration uses builder-style `with_*(mut self, ..) -> Self` methods.
 - Log messages start with `[rtsp]`.
-- Protocol enums (`Version`, `RequestMethod`) are `#[non_exhaustive]` and have a catch-all variant (`Other(String)`, `Extension(String)`).
+- Protocol enums (`Version`, `RequestMethod`, `StatusCode`) are `#[non_exhaustive]` and have a catch-all variant (`Other(String)`, `Extension(String)`, `Extension(u16, String)` for a code and its reason phrase). A `Response` holds one `StatusCode`, which carries both the code and the reason phrase. `Response::new` panics if the reason phrase contains a line break. `Response::parse` turns a known code into its named variant and drops the peer's reason phrase, and turns an unknown code into `Extension(code, reason phrase)`.
 - `rustfmt.toml` sets `use_small_heuristics = "Max"`.
 - There are no rustdoc comments yet. Open questions are left as `// TODO(atokodi): ...` comments.
 

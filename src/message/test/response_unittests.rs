@@ -33,25 +33,31 @@ fn parse_reads_status_line() {
     let response = response(b"RTSP/1.0 200 OK");
 
     assert_eq!(response.version, Version::V1);
-    assert_eq!(response.status_code, 200);
-    assert_eq!(response.reason_phrase, "OK");
+    assert_eq!(response.status_code, StatusCode::Ok);
 }
 
 #[test]
-fn parse_keeps_spaces_inside_reason_phrase() {
-    let response = response(b"RTSP/2.0 454 Session Not Found");
+fn parse_maps_known_code_to_its_status_code_whatever_the_reason_phrase() {
+    assert_eq!(response(b"RTSP/2.0 454 Session Gone").status_code, StatusCode::SessionNotFound);
+    assert_eq!(response(b"RTSP/1.0 200").status_code, StatusCode::Ok);
+}
+
+#[test]
+fn parse_keeps_unknown_code_and_its_reason_phrase_as_extension() {
+    let response = response(b"RTSP/2.0 470 Connection Authorization Required");
 
     assert_eq!(response.version, Version::V2);
-    assert_eq!(response.status_code, 454);
-    assert_eq!(response.reason_phrase, "Session Not Found");
+    assert_eq!(
+        response.status_code,
+        StatusCode::Extension(470, "Connection Authorization Required".to_owned())
+    );
 }
 
 #[test]
-fn parse_accepts_missing_reason_phrase() {
-    let response = response(b"RTSP/1.0 200");
+fn parse_accepts_unknown_code_without_reason_phrase() {
+    let response = response(b"RTSP/1.0 299");
 
-    assert_eq!(response.status_code, 200);
-    assert_eq!(response.reason_phrase, "");
+    assert_eq!(response.status_code, StatusCode::Extension(299, String::new()));
 }
 
 #[test]
@@ -59,8 +65,14 @@ fn parse_accepts_extra_whitespace_between_parts() {
     let response = response(b"  RTSP/1.0   404   Not Found  ");
 
     assert_eq!(response.version, Version::V1);
-    assert_eq!(response.status_code, 404);
-    assert_eq!(response.reason_phrase, "Not Found");
+    assert_eq!(response.status_code, StatusCode::NotFound);
+}
+
+#[test]
+fn parse_trims_reason_phrase_of_unknown_code() {
+    let response = response(b"RTSP/1.0   299   Partly Done  ");
+
+    assert_eq!(response.status_code, StatusCode::Extension(299, "Partly Done".to_owned()));
 }
 
 #[test]
@@ -161,14 +173,34 @@ fn new_sets_version_and_status_code() {
     let response = Response::new(Version::V2, StatusCode::NotFound);
 
     assert_eq!(response.version(), &Version::V2);
-    assert_eq!(response.status_code(), 404);
+    assert_eq!(response.status_code(), &StatusCode::NotFound);
 }
 
 #[test]
-fn new_uses_reason_phrase_of_status_code() {
-    let response = Response::new(Version::V1, StatusCode::SessionNotFound);
+fn new_keeps_extension_status_code() {
+    let status_code = StatusCode::Extension(470, "Connection Authorization Required".to_owned());
 
-    assert_eq!(response.reason_phrase(), "Session Not Found");
+    let response = Response::new(Version::V2, status_code.clone());
+
+    assert_eq!(response.status_code(), &status_code);
+}
+
+#[test]
+#[should_panic(expected = "invalid reason phrase")]
+fn new_rejects_line_break_in_extension_reason_phrase() {
+    let _ = Response::new(
+        Version::V1,
+        StatusCode::Extension(470, "Denied\r\nX-Injected: yes".to_owned()),
+    );
+}
+
+#[test]
+#[should_panic(expected = "invalid reason phrase")]
+fn new_rejects_bare_newline_in_extension_reason_phrase() {
+    let _ = Response::new(
+        Version::V1,
+        StatusCode::Extension(470, "Denied\nX-Injected: yes".to_owned()),
+    );
 }
 
 #[test]
@@ -177,14 +209,6 @@ fn new_has_no_headers_or_body() {
 
     assert!(response.headers().is_empty());
     assert!(response.body().is_empty());
-}
-
-#[test]
-fn with_reason_phrase_replaces_standard_reason_phrase() {
-    let response = Response::new(Version::V1, StatusCode::Ok).with_reason_phrase("Everything Fine");
-
-    assert_eq!(response.status_code(), 200);
-    assert_eq!(response.reason_phrase(), "Everything Fine");
 }
 
 #[test]
@@ -293,6 +317,23 @@ fn new_response_encodes_to_status_line_and_empty_head() {
 }
 
 #[test]
+fn extension_response_encodes_its_code_and_reason_phrase() {
+    let response = Response::new(
+        Version::Other("HTTP/1.1".to_owned()),
+        StatusCode::Extension(101, "Switching Protocols".to_owned()),
+    );
+
+    assert_eq!(encode(&response), "HTTP/1.1 101 Switching Protocols\r\n\r\n");
+}
+
+#[test]
+fn extension_response_encodes_empty_reason_phrase() {
+    let response = Response::new(Version::V2, StatusCode::Extension(470, String::new()));
+
+    assert_eq!(encode(&response), "RTSP/2.0 470 \r\n\r\n");
+}
+
+#[test]
 fn created_response_encodes_headers_body_and_content_length() {
     let response = Response::new(Version::V1, StatusCode::Ok)
         .with_header("CSeq", "2")
@@ -320,30 +361,41 @@ fn created_response_displays_headers_and_body() {
     assert_eq!(response.to_string(), "RTSP/2.0 454 Session Not Found\nCSeq: 4\n\ngone");
 }
 
-#[test]
-fn created_response_parses_back_to_same_fields() {
-    let created = Response::new(Version::V2, StatusCode::ServiceUnavailable)
-        .with_reason_phrase("Try Later")
-        .with_header("CSeq", "5")
-        .with_body("retry");
-    let encoded = encode(&created);
+fn parse_back(response: &Response) -> Response {
+    let encoded = encode(response);
     let (head, body) = encoded.split_once("\r\n\r\n").expect("encoded response has a head");
-    let (status_line, header_lines) =
-        head.split_once("\r\n").expect("encoded response has headers");
+    let (status_line, header_lines) = head.split_once("\r\n").unwrap_or((head, ""));
 
     let headers =
         MessageHeaders::try_from(header_lines.as_bytes()).expect("encoded headers should parse");
-    let parsed = Response::parse(
+    Response::parse(
         status_line.as_bytes(),
         headers,
         tokio_util::bytes::Bytes::copy_from_slice(body.as_bytes()),
         ParsingMode::Strict,
     )
-    .expect("encoded status line should parse");
+    .expect("encoded status line should parse")
+}
+
+#[test]
+fn custom_reason_phrase_of_known_code_parses_back_as_its_status_code() {
+    let created = Response::new(Version::V1, StatusCode::Extension(503, "Try Later".to_owned()));
+
+    let parsed = parse_back(&created);
+
+    assert_eq!(parsed.status_code(), &StatusCode::ServiceUnavailable);
+}
+
+#[test]
+fn created_response_parses_back_to_same_fields() {
+    let created = Response::new(Version::V2, StatusCode::Extension(299, "Partly Done".to_owned()))
+        .with_header("CSeq", "5")
+        .with_body("retry");
+
+    let parsed = parse_back(&created);
 
     assert_eq!(parsed.version(), created.version());
     assert_eq!(parsed.status_code(), created.status_code());
-    assert_eq!(parsed.reason_phrase(), created.reason_phrase());
     assert_eq!(parsed.headers().get("CSeq"), Some("5"));
     assert_eq!(parsed.headers().get("Content-Length"), Some("5"));
     assert_eq!(parsed.body(), created.body());

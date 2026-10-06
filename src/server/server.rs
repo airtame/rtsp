@@ -1,5 +1,5 @@
 use crate::connection::{Connection, ConnectionCloseReason};
-use crate::router::Router;
+use crate::router::{RequestHandler, Router};
 use crate::server::ServerDelegate;
 
 const MAX_CONNECTION_BACKLOG: u32 = 1024;
@@ -7,7 +7,7 @@ const MAX_CONNECTION_BACKLOG: u32 = 1024;
 pub struct Server {
     listener: tokio::net::TcpListener,
     cancellation_token: tokio_util::sync::CancellationToken,
-    router: Router,
+    handler: std::sync::Arc<dyn RequestHandler>,
 }
 
 impl Server {
@@ -27,12 +27,12 @@ impl Server {
         Ok(Self {
             listener,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
-            router: Router::new(),
+            handler: std::sync::Arc::new(Router::new()),
         })
     }
 
-    pub fn with_router(mut self, router: Router) -> Self {
-        self.router = router;
+    pub fn with_handler(mut self, handler: impl RequestHandler + 'static) -> Self {
+        self.handler = std::sync::Arc::new(handler);
         self
     }
 
@@ -85,7 +85,7 @@ impl Server {
             stream,
             addr,
             self.cancellation_token.child_token(),
-            std::sync::Arc::new(self.router.clone()),
+            self.handler.clone(),
             delegate.connection_options(addr),
         );
         log::debug!("[rtsp] new connection: {connection:?}");

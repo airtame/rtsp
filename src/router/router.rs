@@ -6,11 +6,17 @@ type Routes = std::collections::HashMap<String, std::sync::Arc<dyn RequestHandle
 #[derive(Clone, Default)]
 pub struct Router {
     routes: std::sync::Arc<std::sync::RwLock<Routes>>,
+    fallback: Option<std::sync::Arc<dyn RequestHandler>>,
 }
 
 impl Router {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_fallback(mut self, handler: impl RequestHandler + 'static) -> Self {
+        self.fallback = Some(std::sync::Arc::new(handler));
+        self
     }
 
     pub fn register(
@@ -30,7 +36,7 @@ impl Router {
     }
 
     pub(crate) fn route(&self, request: &Request) -> Response {
-        match self.get(request.path()) {
+        match self.get(request.path()).or_else(|| self.fallback.clone()) {
             Some(handler) => handler.handle(request),
             None => Response::new(request.version().clone(), StatusCode::NotFound),
         }
@@ -51,7 +57,10 @@ impl std::fmt::Debug for Router {
         let mut paths: Vec<&String> = routes.keys().collect();
         paths.sort();
 
-        f.debug_struct("Router").field("paths", &paths).finish()
+        f.debug_struct("Router")
+            .field("paths", &paths)
+            .field("fallback", &self.fallback.is_some())
+            .finish()
     }
 }
 

@@ -13,5 +13,5 @@ pub use message::{
     MessageError, MessageHeaders, ParsingMode, Request, RequestMethod, Response, StatusCode,
     Version,
 };
-pub use router::{RequestHandler, Router};
+pub use router::{MethodRouter, RequestHandler, Router};
 pub use server::{Server, ServerDelegate};

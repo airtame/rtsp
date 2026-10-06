@@ -1,6 +1,7 @@
 use crate::message::MessageError;
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ConnectionCloseReason {
     ClosedByPeer,
     Cancelled,

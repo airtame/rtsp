@@ -95,9 +95,6 @@ impl Response {
         &self.body
     }
 
-    // TODO(atokodi): Always write Content-Length (0 for an empty body), except for 1xx, 204 and
-    // 304 responses. Without it an HTTP client in lenient mode reads the body until the
-    // connection closes, so it waits for the idle timeout.
     pub(crate) fn encode(&self, dst: &mut tokio_util::bytes::BytesMut) {
         use std::fmt::Write as _;
 

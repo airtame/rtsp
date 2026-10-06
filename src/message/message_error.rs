@@ -1,6 +1,5 @@
-// TODO(atokodi): Rename to HeaderError? Have a separarate MessageError.
-// TODO(atokodi): Simply use std::io::Error with ErrorKind::InvalidData as in version.rs?
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum MessageError {
     Io(std::io::Error),
     InvalidContentLength(String),
@@ -24,6 +23,8 @@ impl std::fmt::Display for MessageError {
         }
     }
 }
+
+impl std::error::Error for MessageError {}
 
 impl From<std::io::Error> for MessageError {
     fn from(err: std::io::Error) -> Self {

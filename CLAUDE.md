@@ -65,7 +65,7 @@ An incoming response completes the oneshot whose `CSeq` it carries. Responses wi
 
 **Parsing mode.** `MessageCodec` holds the connection's `ParsingMode` and passes it through `Message::new` to `Request::parse` and `Response::parse`. In `Strict` mode (the default), a `Version::Other` (such as `HTTP/1.1`) is rejected as an invalid start line, and a request without `CSeq` fails with `MessageError::MissingHeader`. Both are malformed-message errors, so the peer gets a `400` and the connection stays open. `Lenient` mode accepts both. `Version::from_str` doesn't depend on the mode, so unknown RTSP versions such as `RTSP/1.1` are rejected in both modes.
 
-Known gaps in the codec (no limit on header size or `Content-Length`, and EOF in the middle of a message) are tracked as TODOs in `message_codec.rs`.
+Known gaps in the codec (no limit on header size or `Content-Length`, and EOF in the middle of a message) are tracked in `TODO.md`.
 
 **Request vs. response.** `Message::new` checks whether the first token of the start line contains `/`. If it does (as in `RTSP/1.0 200 OK`), the message is parsed as a response; otherwise it is parsed as a request.
 
@@ -81,9 +81,10 @@ Known gaps in the codec (no limit on header size or `Content-Length`, and EOF in
 - External types are written with fully qualified paths (`std::net::SocketAddr`, `tokio_util::sync::CancellationToken`, `tokio_util::bytes::Bytes`) instead of being imported. `use` is reserved for `crate::` items and extension traits (`SinkExt`, `StreamExt`, `std::fmt::Write as _`).
 - Optional configuration uses builder-style `with_*(mut self, ..) -> Self` methods.
 - Log messages start with `[rtsp]`.
+- Public error enums (`RequestError`, `MessageError`, `ConnectionCloseReason`) are `#[non_exhaustive]`, so new variants aren't breaking changes.
 - Protocol enums (`Version`, `RequestMethod`, `StatusCode`) are `#[non_exhaustive]` and have a catch-all variant (`Other(String)`, `Extension(String)`, `Extension(u16, String)` for a code and its reason phrase). A `Response` holds one `StatusCode`, which carries both the code and the reason phrase. `Response::new` panics if the reason phrase contains a line break. `Response::parse` turns a known code into its named variant and drops the peer's reason phrase, and turns an unknown code into `Extension(code, reason phrase)`.
 - `rustfmt.toml` sets `use_small_heuristics = "Max"`.
-- There are no rustdoc comments yet. Open questions are left as `// TODO(atokodi): ...` comments.
+- There are no rustdoc comments yet. Open questions and known gaps go in `TODO.md`, never in `// TODO` comments, because the source is published and `TODO.md` is excluded from the package.
 
 ## Tests
 

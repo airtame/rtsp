@@ -57,6 +57,13 @@ fn display_escapes_control_characters() {
 }
 
 #[test]
+fn converts_into_boxed_std_error() {
+    let err: Box<dyn std::error::Error> = MessageError::MissingHeader("CSeq".to_owned()).into();
+
+    assert_eq!(err.to_string(), r#"missing header: "CSeq""#);
+}
+
+#[test]
 fn from_io_error_wraps_it_in_io_variant() {
     let err = MessageError::from(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
 

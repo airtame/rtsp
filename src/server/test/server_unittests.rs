@@ -14,18 +14,19 @@ fn localhost_v6() -> std::net::SocketAddr {
     std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, 0))
 }
 
-async fn run_until_stopped(server: &Server, delegate: &impl ServerDelegate) {
-    tokio::time::timeout(TEST_TIMEOUT, server.run(delegate))
+async fn run_until_stopped(server: Server) {
+    tokio::time::timeout(TEST_TIMEOUT, server.run())
         .await
         .expect("server run loop did not exit after stop");
 }
 
 /// Records every delegate call, and optionally closes each new connection right away.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct RecordingDelegate {
     close_new_connections: bool,
-    new_connections: std::sync::Mutex<Vec<ConnectionHandle>>,
-    closed_connections: std::sync::Mutex<Vec<(std::net::SocketAddr, ConnectionCloseReason)>>,
+    new_connections: std::sync::Arc<std::sync::Mutex<Vec<ConnectionHandle>>>,
+    closed_connections:
+        std::sync::Arc<std::sync::Mutex<Vec<(std::net::SocketAddr, ConnectionCloseReason)>>>,
 }
 
 impl ServerDelegate for RecordingDelegate {
@@ -56,13 +57,17 @@ async fn accept_client(
 }
 
 async fn join_next_connection(
-    connection_tasks: &mut tokio::task::JoinSet<(std::net::SocketAddr, ConnectionCloseReason)>,
+    server: &mut Server,
 ) -> (std::net::SocketAddr, ConnectionCloseReason) {
-    tokio::time::timeout(TEST_TIMEOUT, connection_tasks.join_next())
+    tokio::time::timeout(TEST_TIMEOUT, server.connection_tasks.join_next())
         .await
         .expect("connection task did not finish")
         .expect("no connection task was spawned")
         .expect("connection task panicked")
+}
+
+async fn next_event(server: &mut Server) -> ServerEvent {
+    tokio::time::timeout(TEST_TIMEOUT, server.next_event()).await.expect("no server event")
 }
 
 #[tokio::test]
@@ -102,41 +107,41 @@ async fn bind_fails_when_address_in_use() {
 #[tokio::test]
 async fn run_returns_after_stop() {
     let server = Server::bind(localhost_v4()).expect("bind failed");
+    let handle = server.handle();
 
-    tokio::join!(run_until_stopped(&server, &()), async { server.stop() });
+    tokio::join!(run_until_stopped(server), async { handle.stop() });
 }
 
 #[tokio::test]
 async fn run_returns_immediately_when_stopped_before_run() {
     let server = Server::bind(localhost_v4()).expect("bind failed");
 
-    server.stop();
+    server.handle().stop();
 
-    run_until_stopped(&server, &()).await;
+    run_until_stopped(server).await;
 }
 
 #[tokio::test]
 async fn stop_is_idempotent() {
     let server = Server::bind(localhost_v4()).expect("bind failed");
+    let handle = server.handle();
 
-    server.stop();
-    server.stop();
+    handle.stop();
+    handle.stop();
 
-    run_until_stopped(&server, &()).await;
+    run_until_stopped(server).await;
 }
 
 #[tokio::test]
 async fn run_can_be_stopped_from_another_task() {
-    let server = std::sync::Arc::new(Server::bind(localhost_v4()).expect("bind failed"));
+    let server = Server::bind(localhost_v4()).expect("bind failed");
+    let handle = server.handle();
 
-    let handle = tokio::spawn({
-        let server = server.clone();
-        async move { server.run(&()).await }
-    });
+    let run = tokio::spawn(server.run());
 
-    server.stop();
+    handle.stop();
 
-    tokio::time::timeout(TEST_TIMEOUT, handle)
+    tokio::time::timeout(TEST_TIMEOUT, run)
         .await
         .expect("server run loop did not exit after stop")
         .expect("server run task panicked");
@@ -146,43 +151,87 @@ async fn run_can_be_stopped_from_another_task() {
 async fn run_returns_after_stop_with_open_connections() {
     let server = Server::bind(localhost_v4()).expect("bind failed");
     let addr = server.listener.local_addr().unwrap();
+    let handle = server.handle();
 
-    let (_, _clients) = tokio::join!(run_until_stopped(&server, &()), async {
+    let (_, _clients) = tokio::join!(run_until_stopped(server), async {
         let mut clients = Vec::new();
         for _ in 0..3 {
             clients
                 .push(tokio::net::TcpStream::connect(addr).await.expect("client connect failed"));
         }
-        server.stop();
+        handle.stop();
         clients
     });
 }
 
 #[tokio::test]
+async fn next_event_returns_cancelled_after_stop() {
+    let mut server = Server::bind(localhost_v4()).expect("bind failed");
+
+    server.handle().stop();
+
+    let event = next_event(&mut server).await;
+    assert!(matches!(event, ServerEvent::Cancelled), "unexpected event: {event:?}");
+}
+
+#[tokio::test]
+async fn next_event_returns_connection_accepted_for_new_client() {
+    let mut server = Server::bind(localhost_v4()).expect("bind failed");
+    let addr = server.listener.local_addr().unwrap();
+    let client = tokio::net::TcpStream::connect(addr).await.expect("client connect failed");
+    let client_addr = client.local_addr().unwrap();
+
+    let event = next_event(&mut server).await;
+
+    assert!(
+        matches!(event, ServerEvent::ConnectionAccepted(_, peer_addr) if peer_addr == client_addr),
+        "unexpected event: {event:?}"
+    );
+}
+
+#[tokio::test]
+async fn next_event_returns_connection_closed_when_connection_ends() {
+    let mut server = Server::bind(localhost_v4()).expect("bind failed");
+    let (client, stream, peer_addr) = accept_client(&server).await;
+    let client_addr = client.local_addr().unwrap();
+    server.accept_connection(stream, peer_addr);
+
+    drop(client);
+
+    let event = next_event(&mut server).await;
+    assert!(
+        matches!(
+            event,
+            ServerEvent::ConnectionClosed(Ok((addr, ConnectionCloseReason::ClosedByPeer)))
+                if addr == client_addr
+        ),
+        "unexpected event: {event:?}"
+    );
+}
+
+#[tokio::test]
 async fn accept_connection_reports_peer_address_and_close_reason() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
-    let mut connection_tasks = tokio::task::JoinSet::new();
+    let mut server = Server::bind(localhost_v4()).expect("bind failed");
     let (client, stream, peer_addr) = accept_client(&server).await;
     let client_addr = client.local_addr().unwrap();
 
-    server.accept_connection(&mut connection_tasks, stream, peer_addr, &());
+    server.accept_connection(stream, peer_addr);
     drop(client);
 
-    let (addr, reason) = join_next_connection(&mut connection_tasks).await;
+    let (addr, reason) = join_next_connection(&mut server).await;
     assert_eq!(addr, client_addr);
     assert!(matches!(reason, ConnectionCloseReason::ClosedByPeer), "unexpected reason: {reason:?}");
 }
 
 #[tokio::test]
 async fn stop_cancels_and_closes_accepted_connections() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
-    let mut connection_tasks = tokio::task::JoinSet::new();
+    let mut server = Server::bind(localhost_v4()).expect("bind failed");
     let (mut client, stream, peer_addr) = accept_client(&server).await;
 
-    server.accept_connection(&mut connection_tasks, stream, peer_addr, &());
-    server.stop();
+    server.accept_connection(stream, peer_addr);
+    server.handle().stop();
 
-    let (_, reason) = join_next_connection(&mut connection_tasks).await;
+    let (_, reason) = join_next_connection(&mut server).await;
     assert!(matches!(reason, ConnectionCloseReason::Cancelled), "unexpected reason: {reason:?}");
 
     let mut buffer = [0u8; 1];
@@ -195,26 +244,25 @@ async fn stop_cancels_and_closes_accepted_connections() {
 
 #[tokio::test]
 async fn with_connection_options_applies_options_to_accepted_connections() {
-    let server = Server::bind(localhost_v4()).expect("bind failed").with_connection_options(
+    let mut server = Server::bind(localhost_v4()).expect("bind failed").with_connection_options(
         ConnectionOptions::new().with_idle_timeout(std::time::Duration::from_millis(100)),
     );
-    let mut connection_tasks = tokio::task::JoinSet::new();
     let (_client, stream, peer_addr) = accept_client(&server).await;
 
-    server.accept_connection(&mut connection_tasks, stream, peer_addr, &());
+    server.accept_connection(stream, peer_addr);
 
-    let (_, reason) = join_next_connection(&mut connection_tasks).await;
+    let (_, reason) = join_next_connection(&mut server).await;
     assert!(matches!(reason, ConnectionCloseReason::IdleTimeout), "unexpected reason: {reason:?}");
 }
 
 #[tokio::test]
-async fn accept_connection_passes_connection_handle_to_delegate() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
+async fn with_delegate_passes_connection_handle_to_delegate() {
     let delegate = RecordingDelegate::default();
-    let mut connection_tasks = tokio::task::JoinSet::new();
+    let mut server =
+        Server::bind(localhost_v4()).expect("bind failed").with_delegate(delegate.clone());
     let (client, stream, peer_addr) = accept_client(&server).await;
 
-    server.accept_connection(&mut connection_tasks, stream, peer_addr, &delegate);
+    server.accept_connection(stream, peer_addr);
 
     let new_connections = delegate.new_connections.lock().unwrap();
     assert_eq!(new_connections.len(), 1);
@@ -223,17 +271,17 @@ async fn accept_connection_passes_connection_handle_to_delegate() {
 
 #[tokio::test]
 async fn closing_connection_handle_closes_only_that_connection() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
     let delegate = RecordingDelegate::default();
-    let mut connection_tasks = tokio::task::JoinSet::new();
+    let mut server =
+        Server::bind(localhost_v4()).expect("bind failed").with_delegate(delegate.clone());
     let (mut closed_client, stream, peer_addr) = accept_client(&server).await;
-    server.accept_connection(&mut connection_tasks, stream, peer_addr, &delegate);
+    server.accept_connection(stream, peer_addr);
     let (_open_client, stream, peer_addr) = accept_client(&server).await;
-    server.accept_connection(&mut connection_tasks, stream, peer_addr, &delegate);
+    server.accept_connection(stream, peer_addr);
 
     delegate.new_connections.lock().unwrap()[0].close();
 
-    let (addr, reason) = join_next_connection(&mut connection_tasks).await;
+    let (addr, reason) = join_next_connection(&mut server).await;
     assert_eq!(addr, closed_client.local_addr().unwrap());
     assert!(matches!(reason, ConnectionCloseReason::Cancelled), "unexpected reason: {reason:?}");
 
@@ -244,17 +292,18 @@ async fn closing_connection_handle_closes_only_that_connection() {
         .expect("client read failed");
     assert_eq!(read, 0);
 
-    assert_eq!(connection_tasks.len(), 1, "the other connection was closed too");
+    assert_eq!(server.connection_tasks.len(), 1, "the other connection was closed too");
     assert!(!server.cancellation_token.is_cancelled(), "the server was stopped");
 }
 
 #[tokio::test]
 async fn run_notifies_delegate_about_new_and_closed_connections() {
-    let server = Server::bind(localhost_v4()).expect("bind failed");
-    let addr = server.listener.local_addr().unwrap();
     let delegate = RecordingDelegate { close_new_connections: true, ..Default::default() };
+    let server = Server::bind(localhost_v4()).expect("bind failed").with_delegate(delegate.clone());
+    let addr = server.listener.local_addr().unwrap();
+    let handle = server.handle();
 
-    let (_, client_addr) = tokio::join!(run_until_stopped(&server, &delegate), async {
+    let (_, client_addr) = tokio::join!(run_until_stopped(server), async {
         let mut client = tokio::net::TcpStream::connect(addr).await.expect("client connect failed");
 
         // The delegate closes every new connection, so EOF means the run loop accepted it.
@@ -265,7 +314,7 @@ async fn run_notifies_delegate_about_new_and_closed_connections() {
             .expect("client read failed");
         assert_eq!(read, 0);
 
-        server.stop();
+        handle.stop();
         client.local_addr().unwrap()
     });
 
@@ -291,10 +340,9 @@ fn respond_ok(_: &Request) -> Response {
     Response::new(Version::V1, StatusCode::Ok)
 }
 
-async fn exchange(server: &Server, request: &str, response_length: usize) -> String {
-    let mut connection_tasks = tokio::task::JoinSet::new();
-    let (mut client, stream, peer_addr) = accept_client(server).await;
-    server.accept_connection(&mut connection_tasks, stream, peer_addr, &());
+async fn exchange(mut server: Server, request: &str, response_length: usize) -> String {
+    let (mut client, stream, peer_addr) = accept_client(&server).await;
+    server.accept_connection(stream, peer_addr);
 
     client.write_all(request.as_bytes()).await.expect("client write failed");
     let mut response = vec![0; response_length];
@@ -310,7 +358,7 @@ async fn exchange(server: &Server, request: &str, response_length: usize) -> Str
 async fn bind_answers_requests_with_not_found() {
     let server = Server::bind(localhost_v4()).expect("bind failed");
 
-    let response = exchange(&server, DESCRIBE_REQUEST, NOT_FOUND_RESPONSE.len()).await;
+    let response = exchange(server, DESCRIBE_REQUEST, NOT_FOUND_RESPONSE.len()).await;
 
     assert_eq!(response, NOT_FOUND_RESPONSE);
 }
@@ -319,7 +367,7 @@ async fn bind_answers_requests_with_not_found() {
 async fn with_handler_answers_requests_with_given_handler() {
     let server = Server::bind(localhost_v4()).expect("bind failed").with_handler(respond_ok);
 
-    let response = exchange(&server, DESCRIBE_REQUEST, OK_RESPONSE.len()).await;
+    let response = exchange(server, DESCRIBE_REQUEST, OK_RESPONSE.len()).await;
 
     assert_eq!(response, OK_RESPONSE);
 }
@@ -331,7 +379,7 @@ async fn with_handler_sees_routes_registered_on_router_afterwards() {
 
     router.register("/stream1", respond_ok);
 
-    let response = exchange(&server, DESCRIBE_REQUEST, OK_RESPONSE.len()).await;
+    let response = exchange(server, DESCRIBE_REQUEST, OK_RESPONSE.len()).await;
 
     assert_eq!(response, OK_RESPONSE);
 }
@@ -344,7 +392,7 @@ async fn with_handler_sees_routes_unregistered_from_router_afterwards() {
 
     router.unregister("/stream1");
 
-    let response = exchange(&server, DESCRIBE_REQUEST, NOT_FOUND_RESPONSE.len()).await;
+    let response = exchange(server, DESCRIBE_REQUEST, NOT_FOUND_RESPONSE.len()).await;
 
     assert_eq!(response, NOT_FOUND_RESPONSE);
 }

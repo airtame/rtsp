@@ -4,7 +4,7 @@
 
 - Race every write in `Connection::run` against the cancellation token. While a write is blocked
   (the peer stops reading and the send buffer fills), the loop doesn't poll cancellation or the
-  idle timer, so `ConnectionHandle::close()` and `Server::stop()` can't end the connection, and
+  idle timer, so `ConnectionHandle::close()` and `ServerHandle::stop()` can't end the connection, and
   every caller awaiting a `ResponseFuture` is stuck too. Later, consider splitting the `Framed`
   stream into read and write halves so a slow write doesn't stop reading either.
 - Clean up abandoned entries in the pending-request map. A request whose `ResponseFuture` was
@@ -20,7 +20,7 @@
   whole server loop. Async handlers would remove the reason to block, but only fix the deadlock
   if the connection runs handler futures alongside its loop and keeps responses in request
   order.
-- `ConnectionHandle::is_closed()` only reports `close()` and `Server::stop()`. Also report a
+- `ConnectionHandle::is_closed()` only reports `close()` and `ServerHandle::stop()`. Also report a
   connection that ended for any other reason, e.g. by checking whether the request channel is
   closed.
 

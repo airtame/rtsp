@@ -110,7 +110,7 @@ async fn send_returns_response_from_connection() {
             .expect("caller should be waiting");
     });
 
-    assert_eq!(response.expect("send should succeed").status_code(), 200);
+    assert_eq!(response.expect("send should succeed").status_code(), &StatusCode::Ok);
 }
 
 #[tokio::test]

@@ -81,3 +81,27 @@ fn converts_into_its_code() {
 
     assert_eq!(code, 454);
 }
+
+#[test]
+fn extension_has_given_code_and_reason_phrase() {
+    let status_code = StatusCode::Extension(470, "Connection Authorization Required".to_owned());
+
+    assert_eq!(status_code.code(), 470);
+    assert_eq!(status_code.reason_phrase(), "Connection Authorization Required");
+}
+
+#[test]
+fn extension_converts_into_its_code() {
+    let code: u16 = StatusCode::Extension(470, String::new()).into();
+
+    assert_eq!(code, 470);
+}
+
+#[test]
+fn extension_with_standard_code_keeps_its_own_reason_phrase() {
+    let status_code = StatusCode::Extension(200, "Fine".to_owned());
+
+    assert_eq!(status_code.code(), 200);
+    assert_eq!(status_code.reason_phrase(), "Fine");
+    assert_ne!(status_code, StatusCode::Ok);
+}

@@ -8,7 +8,7 @@ async fn resolves_to_response_sent_by_connection() {
 
     response_tx.send(Response::new(Version::V1, StatusCode::Ok)).expect("future should be waiting");
 
-    assert_eq!(future.await.expect("future should resolve").status_code(), 200);
+    assert_eq!(future.await.expect("future should resolve").status_code(), &StatusCode::Ok);
 }
 
 #[tokio::test]

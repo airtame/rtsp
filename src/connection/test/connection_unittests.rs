@@ -529,7 +529,7 @@ async fn send_writes_request_with_cseq_and_returns_matching_response() {
 
     assert_eq!(request, expected_request);
     let response = response.expect("send should succeed");
-    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.status_code(), &StatusCode::Ok);
     assert_eq!(response.headers().get("Public"), Some("OPTIONS, DESCRIBE"));
 }
 
@@ -644,7 +644,7 @@ async fn send_queues_request_before_response_is_awaited() {
     });
 
     assert_eq!(request, expected_request);
-    assert_eq!(response.expect("send should succeed").status_code(), 200);
+    assert_eq!(response.expect("send should succeed").status_code(), &StatusCode::Ok);
 }
 
 #[tokio::test]
@@ -700,5 +700,5 @@ async fn run_answers_peer_requests_while_own_request_is_pending() {
     );
 
     assert_eq!(answer, not_found);
-    assert_eq!(response.expect("send should succeed").status_code(), 200);
+    assert_eq!(response.expect("send should succeed").status_code(), &StatusCode::Ok);
 }

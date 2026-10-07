@@ -34,12 +34,7 @@ impl tokio_util::codec::Decoder for MessageCodec {
         let start_line_length = start_line.len();
         let headers = MessageHeaders::try_from(header_lines)?;
 
-        let body_length: usize = match headers.get(MessageHeaderName::ContentLength) {
-            Some(value) => {
-                value.parse().map_err(|_| MessageError::InvalidContentLength(value.to_owned()))?
-            }
-            None => 0,
-        };
+        let body_length = content_length(&headers)?;
 
         let message_length = message_head_end + DOUBLE_CRLF.len() + body_length;
         if src.len() < message_length {
@@ -51,11 +46,29 @@ impl tokio_util::codec::Decoder for MessageCodec {
         let start_line = &raw_message[..start_line_length];
         let body = raw_message.slice(message_head_end + DOUBLE_CRLF.len()..);
         let cseq = headers.get(MessageHeaderName::CSeq).map(str::to_owned);
+        let has_repeated_single_value_header = {
+            let mut seen_names = std::collections::HashSet::new();
+            headers.iter().any(|(name, _)| !name.allows_multiple() && !seen_names.insert(name))
+        };
 
-        Ok(Some(
-            Message::new(start_line, headers, body, self.parsing_mode)
-                .map_err(|error| MalformedMessage { error, cseq }),
-        ))
+        let message = Message::new(start_line, headers, body, self.parsing_mode);
+        if let Ok(message) = &message {
+            if has_repeated_single_value_header {
+                log::warn!("[rtsp] message repeats a single-value header:\n{message}");
+            }
+        }
+
+        Ok(Some(message.map_err(|error| MalformedMessage { error, cseq })))
+    }
+}
+
+fn content_length(headers: &MessageHeaders) -> Result<usize, MessageError> {
+    let values = headers.get_all(MessageHeaderName::ContentLength).collect::<Vec<_>>();
+
+    match values.as_slice() {
+        [] => Ok(0),
+        [value] => value.parse().map_err(|_| MessageError::InvalidContentLength(value.to_string())),
+        values => Err(MessageError::InvalidContentLength(values.join(", "))),
     }
 }
 

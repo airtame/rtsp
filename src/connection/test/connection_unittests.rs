@@ -428,6 +428,26 @@ async fn run_returns_invalid_message_when_client_sends_malformed_header() {
 }
 
 #[tokio::test]
+async fn run_returns_invalid_message_when_client_sends_conflicting_content_lengths() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+    let bad_request = "RTSP/1.0 400 Bad Request\r\n\r\n";
+
+    client
+        .write_all(
+            b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab",
+        )
+        .await
+        .expect("client write failed");
+
+    let reason = run_until_closed(connection).await;
+    assert!(
+        matches!(&reason, ConnectionCloseReason::InvalidMessage(MessageError::InvalidContentLength(value)) if value == "1, 2"),
+        "unexpected reason: {reason:?}"
+    );
+    assert_eq!(read_response(&mut client, bad_request.len()).await, bad_request);
+}
+
+#[tokio::test]
 async fn run_answers_request_without_cseq_with_bad_request_in_strict_mode() {
     let TestConnection { mut client, connection, .. } = connect().await;
     let bad_request = "RTSP/1.0 400 Bad Request\r\n\r\n";

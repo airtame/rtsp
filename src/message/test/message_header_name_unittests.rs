@@ -166,6 +166,35 @@ fn eq_treats_extension_spelled_like_standard_name_as_that_name() {
 }
 
 #[test]
+fn allows_multiple_is_true_for_list_headers() {
+    for name in [
+        MessageHeaderName::Public,
+        MessageHeaderName::Require,
+        MessageHeaderName::Transport,
+        MessageHeaderName::WwwAuthenticate,
+    ] {
+        assert!(name.allows_multiple(), "name: {name}");
+    }
+}
+
+#[test]
+fn allows_multiple_is_false_for_single_value_headers() {
+    for name in [
+        MessageHeaderName::ContentLength,
+        MessageHeaderName::ContentType,
+        MessageHeaderName::CSeq,
+        MessageHeaderName::Session,
+    ] {
+        assert!(!name.allows_multiple(), "name: {name}");
+    }
+}
+
+#[test]
+fn allows_multiple_is_true_for_extension_headers() {
+    assert!(extension("X-Custom").allows_multiple());
+}
+
+#[test]
 fn hash_ignores_case() {
     let names =
         std::collections::HashSet::from([extension("X-Custom"), MessageHeaderName::Session]);

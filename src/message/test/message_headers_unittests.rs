@@ -28,6 +28,45 @@ fn get_ignores_case_of_name() {
 }
 
 #[test]
+fn get_returns_first_of_repeated_values() {
+    let headers = parse("Public: OPTIONS\r\nPublic: DESCRIBE");
+
+    assert_eq!(headers.get(MessageHeaderName::Public), Some("OPTIONS"));
+}
+
+#[test]
+fn get_all_returns_every_value_in_order() {
+    let headers = parse("Public: OPTIONS\r\nCSeq: 1\r\npublic: DESCRIBE");
+
+    let values = headers.get_all(MessageHeaderName::Public).collect::<Vec<_>>();
+
+    assert_eq!(values, ["OPTIONS", "DESCRIBE"]);
+}
+
+#[test]
+fn get_all_returns_nothing_for_missing_header() {
+    let headers = parse("CSeq: 1");
+
+    assert_eq!(headers.get_all("Public").count(), 0);
+}
+
+#[test]
+fn iter_returns_every_header_in_order() {
+    let headers = parse("CSeq: 1\r\nX-Custom: a\r\npublic: OPTIONS");
+
+    let fields = headers.iter().collect::<Vec<_>>();
+
+    assert_eq!(
+        fields,
+        [
+            (&MessageHeaderName::CSeq, "1"),
+            (&MessageHeaderName::Extension("X-Custom".to_owned()), "a"),
+            (&MessageHeaderName::Public, "OPTIONS")
+        ]
+    );
+}
+
+#[test]
 fn try_from_trims_whitespace_around_name_and_value() {
     let headers = parse("  CSeq  :   1  ");
 

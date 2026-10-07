@@ -197,6 +197,30 @@ fn decode_returns_error_for_invalid_content_length() {
 }
 
 #[test]
+fn decode_returns_error_for_repeated_content_length() {
+    let mut src = buffer(b"RTSP/1.0 200 OK\r\nContent-Length: 5\r\ncontent-length: 5\r\n\r\nhello");
+
+    let err = decode_err(&mut src);
+
+    assert!(
+        matches!(&err, MessageError::InvalidContentLength(value) if value == "5, 5"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn decode_returns_error_for_conflicting_content_lengths() {
+    let mut src = buffer(b"RTSP/1.0 200 OK\r\nContent-Length: 5\r\ncontent-length: 7\r\n\r\nhello");
+
+    let err = decode_err(&mut src);
+
+    assert!(
+        matches!(&err, MessageError::InvalidContentLength(value) if value == "5, 7"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
 fn decode_returns_error_for_negative_content_length() {
     let mut src = buffer(b"RTSP/1.0 200 OK\r\nContent-Length: -5\r\n\r\n");
 

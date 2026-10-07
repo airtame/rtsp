@@ -17,6 +17,19 @@ impl MessageHeaders {
             .map(|(_, value)| value.as_str())
     }
 
+    pub fn get_all(&self, name: impl Into<MessageHeaderName>) -> impl Iterator<Item = &str> {
+        let name = name.into();
+
+        self.fields
+            .iter()
+            .filter(move |(field_name, _)| *field_name == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&MessageHeaderName, &str)> {
+        self.fields.iter().map(|(name, value)| (name, value.as_str()))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.fields.is_empty()
     }

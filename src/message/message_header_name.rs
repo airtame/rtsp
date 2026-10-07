@@ -134,6 +134,41 @@ impl MessageHeaderName {
             Self::Extension(name) => name,
         }
     }
+
+    pub fn allows_multiple(&self) -> bool {
+        matches!(
+            self,
+            Self::Accept
+                | Self::AcceptEncoding
+                | Self::AcceptLanguage
+                | Self::AcceptRanges
+                | Self::Allow
+                | Self::AuthenticationInfo
+                | Self::CacheControl
+                | Self::Connection
+                | Self::ContentEncoding
+                | Self::ContentLanguage
+                | Self::IfMatch
+                | Self::IfNoneMatch
+                | Self::MediaProperties
+                | Self::MediaRange
+                | Self::ProxyAuthenticate
+                | Self::ProxyAuthenticationInfo
+                | Self::ProxyRequire
+                | Self::ProxySupported
+                | Self::Public
+                | Self::Range
+                | Self::Require
+                | Self::RtpInfo
+                | Self::Supported
+                | Self::Transport
+                | Self::Unsupported
+                | Self::Vary
+                | Self::Via
+                | Self::WwwAuthenticate
+                | Self::Extension(_)
+        )
+    }
 }
 
 impl std::fmt::Display for MessageHeaderName {

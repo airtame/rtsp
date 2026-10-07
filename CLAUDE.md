@@ -60,7 +60,9 @@ An incoming response completes the oneshot whose `CSeq` it carries. Responses wi
 
 **Two-tier error handling in `MessageCodec`.** `Decoder::Item` is `Result<Message, MalformedMessage>` and `Decoder::Error` is `MessageError`:
 - **Bad start line, framing still known.** The decoder yields `Ok(Some(Err(MalformedMessage)))`. The connection replies `400` (echoing `CSeq` if it is numeric) and keeps reading.
-- **Framing lost** (bad header line, non-UTF-8 headers or an invalid `Content-Length`). The decoder returns `Err(MessageError)`. The connection replies `400`, then closes with `InvalidMessage`.
+- **Framing lost** (bad header line, non-UTF-8 headers, an invalid `Content-Length`, or more than one `Content-Length` header). The decoder returns `Err(MessageError)`. The connection replies `400`, then closes with `InvalidMessage`.
+
+Header lines may repeat when `MessageHeaderName::allows_multiple()` is true (headers whose value is a comma-separated list, and extension headers); `MessageHeaders::get_all` returns them in order. If any other header repeats, the codec logs a warning with the whole message once it's complete, and parses the message anyway.
 - **`MessageError::Io`.** The connection closes with `Io` and sends no reply.
 
 **Parsing mode.** `MessageCodec` holds the connection's `ParsingMode` and passes it through `Message::new` to `Request::parse` and `Response::parse`. In `Strict` mode (the default), a `Version::Other` (such as `HTTP/1.1`) is rejected as an invalid start line, and a request without `CSeq` fails with `MessageError::MissingHeader`. Both are malformed-message errors, so the peer gets a `400` and the connection stays open. `Lenient` mode accepts both. `Version::from_str` doesn't depend on the mode, so unknown RTSP versions such as `RTSP/1.1` are rejected in both modes.

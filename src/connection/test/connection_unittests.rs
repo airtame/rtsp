@@ -90,6 +90,121 @@ async fn debug_shows_peer_address_and_options() {
     );
 }
 
+async fn next_event(connection: &mut Connection) -> ConnectionEvent {
+    tokio::time::timeout(TEST_TIMEOUT, connection.next_event()).await.expect("no connection event")
+}
+
+#[tokio::test]
+async fn next_event_returns_cancelled_when_token_is_cancelled() {
+    let TestConnection { client: _client, mut connection, cancellation_token, .. } =
+        connect().await;
+
+    cancellation_token.cancel();
+
+    let event = next_event(&mut connection).await;
+    assert!(matches!(event, ConnectionEvent::Cancelled), "unexpected event: {event:?}");
+}
+
+#[tokio::test]
+async fn next_event_returns_idle_timeout_when_client_sends_nothing() {
+    let TestConnection { client: _client, mut connection, .. } = connect_with_options(
+        ConnectionOptions::new().with_idle_timeout(std::time::Duration::from_millis(100)),
+    )
+    .await;
+
+    let event = next_event(&mut connection).await;
+    assert!(matches!(event, ConnectionEvent::IdleTimeout), "unexpected event: {event:?}");
+}
+
+#[tokio::test]
+async fn next_event_returns_closed_by_peer_when_client_disconnects() {
+    let TestConnection { client, mut connection, .. } = connect().await;
+
+    drop(client);
+
+    let event = next_event(&mut connection).await;
+    assert!(matches!(event, ConnectionEvent::ClosedByPeer), "unexpected event: {event:?}");
+}
+
+#[tokio::test]
+async fn next_event_returns_read_failed_when_connection_is_reset() {
+    let TestConnection { client, mut connection, .. } = connect().await;
+
+    client.set_zero_linger().expect("set_zero_linger failed");
+    drop(client);
+
+    let event = next_event(&mut connection).await;
+    assert!(
+        matches!(&event, ConnectionEvent::ReadFailed(err) if err.kind() == std::io::ErrorKind::ConnectionReset),
+        "unexpected event: {event:?}"
+    );
+}
+
+#[tokio::test]
+async fn next_event_returns_invalid_message_for_malformed_header() {
+    let TestConnection { mut client, mut connection, .. } = connect().await;
+
+    client.write_all(b"OPTIONS * RTSP/1.0\r\nCSeq 1\r\n\r\n").await.expect("client write failed");
+
+    let event = next_event(&mut connection).await;
+    assert!(
+        matches!(&event, ConnectionEvent::InvalidMessage(MessageError::InvalidHeader(line)) if line == "CSeq 1"),
+        "unexpected event: {event:?}"
+    );
+}
+
+#[tokio::test]
+async fn next_event_returns_malformed_message_for_invalid_start_line() {
+    let TestConnection { mut client, mut connection, .. } = connect().await;
+
+    client.write_all(b"OPTIONS\r\nCSeq: 1\r\n\r\n").await.expect("client write failed");
+
+    let event = next_event(&mut connection).await;
+    assert!(
+        matches!(&event, ConnectionEvent::MalformedMessage(malformed) if malformed.cseq.as_deref() == Some("1")),
+        "unexpected event: {event:?}"
+    );
+}
+
+#[tokio::test]
+async fn next_event_returns_request_received_for_request() {
+    let TestConnection { mut client, mut connection, .. } = connect().await;
+
+    client.write_all(OPTIONS_REQUEST).await.expect("client write failed");
+
+    let event = next_event(&mut connection).await;
+    assert!(
+        matches!(&event, ConnectionEvent::RequestReceived(request) if request.method() == &RequestMethod::Options),
+        "unexpected event: {event:?}"
+    );
+}
+
+#[tokio::test]
+async fn next_event_returns_response_received_for_response() {
+    let TestConnection { mut client, mut connection, .. } = connect().await;
+
+    client.write_all(b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n").await.expect("client write failed");
+
+    let event = next_event(&mut connection).await;
+    assert!(
+        matches!(&event, ConnectionEvent::ResponseReceived(response) if response.status_code() == &StatusCode::Ok),
+        "unexpected event: {event:?}"
+    );
+}
+
+#[tokio::test]
+async fn next_event_returns_request_queued_for_sent_request() {
+    let TestConnection { client: _client, mut connection, handle, .. } = connect().await;
+
+    let _response = handle.send(options_request());
+
+    let event = next_event(&mut connection).await;
+    assert!(
+        matches!(&event, ConnectionEvent::RequestQueued(pending) if pending.request.method() == &RequestMethod::Options),
+        "unexpected event: {event:?}"
+    );
+}
+
 #[tokio::test]
 async fn run_returns_closed_by_peer_when_client_disconnects() {
     let TestConnection { client, connection, .. } = connect().await;
@@ -155,6 +270,20 @@ async fn run_returns_idle_timeout_when_client_sends_nothing() {
     let TestConnection { client: _client, connection, .. } =
         connect_with_options(ConnectionOptions::new().with_idle_timeout(idle_timeout)).await;
 
+    let started = std::time::Instant::now();
+    let reason = run_until_closed(connection).await;
+
+    assert!(matches!(reason, ConnectionCloseReason::IdleTimeout), "unexpected reason: {reason:?}");
+    assert!(started.elapsed() >= idle_timeout, "closed before the idle timeout elapsed");
+}
+
+#[tokio::test]
+async fn run_starts_idle_timeout_when_run_begins() {
+    let idle_timeout = std::time::Duration::from_millis(100);
+    let TestConnection { client: _client, connection, .. } =
+        connect_with_options(ConnectionOptions::new().with_idle_timeout(idle_timeout)).await;
+
+    tokio::time::sleep(idle_timeout * 2).await;
     let started = std::time::Instant::now();
     let reason = run_until_closed(connection).await;
 

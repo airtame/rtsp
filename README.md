@@ -3,8 +3,9 @@
 Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, built on
 [Tokio](https://tokio.rs).
 
-> **Status:** early development. The crate currently provides a TCP server that runs each
-> accepted connection in its own task and shuts them all down gracefully when stopped, and a
+> **Status:** early development. The crate currently provides a `Server` whose `bind` returns a
+> `ServerHandle` and a `ServerTask`, a future that accepts TCP connections, runs each one in its
+> own task and shuts them all down gracefully when `ServerHandle::stop` is called, and a
 > `Client` whose `connect` returns a `ConnectionHandle` and a `ConnectionTask`, a future that
 > drives the connection until it closes. Incoming RTSP requests are answered by the
 > `RequestHandler` set with `Server::with_handler` or `Client::with_handler` (an empty `Router`
@@ -24,9 +25,9 @@ Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, b
 > disconnects, the server stops, a message arrives whose end can't be determined (invalid
 > headers or `Content-Length`, answered with `400 Bad Request` before closing), no complete
 > message arrives within the optional idle timeout (`ConnectionOptions::with_idle_timeout`,
-> returned for each new connection by `ServerDelegate::connection_options` or set with
-> `Client::with_connection_options`), or the embedder closes it through its `ConnectionHandle`
-> (passed to `ServerDelegate::on_new_connection`, or returned by `Client::connect`). `ConnectionOptions` also
+> set with `Server::with_connection_options` or `Client::with_connection_options`), or the embedder closes it through its `ConnectionHandle`
+> (passed to the `ServerDelegate` set with `Server::with_delegate`, or returned by
+> `Client::connect`). `ConnectionOptions` also
 > sets the `ParsingMode`. In `Strict` mode (the default) messages must use RTSP/1.0 or RTSP/2.0
 > and requests must carry `CSeq`; anything else is answered with `400 Bad Request` and the
 > connection keeps going. `Lenient` mode also accepts other versions such as `HTTP/1.1`, and

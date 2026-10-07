@@ -1,9 +1,9 @@
 use futures_util::{SinkExt, StreamExt};
 
 use crate::connection::{
-    ConnectionCloseReason, ConnectionHandle, ConnectionOptions, PendingRequest,
+    ConnectionCloseReason, ConnectionEvent, ConnectionHandle, ConnectionOptions, PendingRequest,
 };
-use crate::message::{Message, MessageCodec, MessageError, Response, StatusCode, Version};
+use crate::message::{Message, MessageCodec, MessageError, Request, Response, StatusCode, Version};
 use crate::router::RequestHandler;
 
 const READ_BUFFER_SIZE: usize = 4096;
@@ -15,6 +15,7 @@ pub(crate) struct Connection {
     cancellation_token: tokio_util::sync::CancellationToken,
     handler: std::sync::Arc<dyn RequestHandler>,
     options: ConnectionOptions,
+    idle_timer: std::pin::Pin<Box<tokio::time::Sleep>>,
     request_rx: tokio::sync::mpsc::UnboundedReceiver<PendingRequest>,
     pending_responses: std::collections::HashMap<u32, tokio::sync::oneshot::Sender<Response>>,
     next_cseq: u32,
@@ -35,6 +36,7 @@ impl Connection {
             MessageCodec::new(options.parsing_mode()),
             READ_BUFFER_SIZE,
         );
+        let idle_timer = Box::pin(tokio::time::sleep(options.idle_timeout().unwrap_or_default()));
 
         (
             Self {
@@ -43,6 +45,7 @@ impl Connection {
                 cancellation_token,
                 handler,
                 options,
+                idle_timer,
                 request_rx,
                 pending_responses: std::collections::HashMap::new(),
                 next_cseq: 1,
@@ -58,91 +61,127 @@ impl Connection {
     pub(crate) async fn run(mut self) -> ConnectionCloseReason {
         log::debug!("[rtsp] connection loop from {} started", self.peer_addr);
 
-        let mut idle_timer =
-            std::pin::pin!(tokio::time::sleep(self.options.idle_timeout().unwrap_or_default()));
+        self.reset_idle_timer();
 
         loop {
-            tokio::select! {
-                _ = self.cancellation_token.cancelled() => {
-                    log::debug!("[rtsp] connection cancellation token triggered for {}", self.peer_addr);
-                    return ConnectionCloseReason::Cancelled
-                }
-                _ = &mut idle_timer, if self.options.idle_timeout().is_some() => {
-                    log::debug!("[rtsp] connection idle timeout triggered for {}", self.peer_addr);
-                    return ConnectionCloseReason::IdleTimeout
-                }
-                message = self.framed_tcp_stream.next() => {
-                    match message {
-                        None => return ConnectionCloseReason::ClosedByPeer,
-                        Some(Ok(decoded)) => {
-                            if let Some(idle_timeout) = self.options.idle_timeout() {
-                                idle_timer.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
-                            }
-                            if let Some(activity_hook) = self.options.activity_hook() {
-                                activity_hook(self.peer_addr);
-                            }
+            let event = self.next_event().await;
+            log::debug!("[rtsp] connection event from {}: {event:?}", self.peer_addr);
 
-                            match decoded {
-                                Ok(Message::Request(request)) => {
-                                    log::debug!("[rtsp] request from {}:\n{request}", self.peer_addr);
-
-                                    let response = self.handler.handle(&request);
-                                    let response = match request.headers().get(CSEQ) {
-                                        Some(cseq) => response.with_cseq(cseq),
-                                        None => response,
-                                    };
-                                    log::debug!("[rtsp] response to {}:\n{response}", self.peer_addr);
-
-                                    if let Err(err) = self.framed_tcp_stream.send(Message::Response(response)).await {
-                                        return ConnectionCloseReason::Io(err);
-                                    }
-                                }
-                                Ok(Message::Response(response)) => {
-                                    log::debug!("[rtsp] response from {}:\n{response}", self.peer_addr);
-
-                                    let response_tx = response
-                                        .headers()
-                                        .get(CSEQ)
-                                        .and_then(|cseq| cseq.parse::<u32>().ok())
-                                        .and_then(|cseq| self.pending_responses.remove(&cseq));
-                                    match response_tx {
-                                        Some(response_tx) => {
-                                            if response_tx.send(response).is_err() {
-                                                log::debug!("[rtsp] response from {} arrived after its request was abandoned", self.peer_addr);
-                                            }
-                                        }
-                                        None => log::warn!("[rtsp] response from {} matches no pending request", self.peer_addr),
-                                    }
-                                }
-                                Err(malformed) => {
-                                    if let Err(err) = self.reject(&malformed.error, malformed.cseq.as_deref()).await {
-                                        return ConnectionCloseReason::Io(err);
-                                    }
-                                }
-                            }
-                        }
-                        Some(Err(MessageError::Io(err))) => return ConnectionCloseReason::Io(err),
-                        Some(Err(err)) => {
-                            if let Err(send_err) = self.reject(&err, None).await {
-                                return ConnectionCloseReason::Io(send_err);
-                            }
-                            return ConnectionCloseReason::InvalidMessage(err);
-                        }
+            match event {
+                ConnectionEvent::Cancelled => return ConnectionCloseReason::Cancelled,
+                ConnectionEvent::IdleTimeout => return ConnectionCloseReason::IdleTimeout,
+                ConnectionEvent::ClosedByPeer => return ConnectionCloseReason::ClosedByPeer,
+                ConnectionEvent::ReadFailed(err) => return ConnectionCloseReason::Io(err),
+                ConnectionEvent::InvalidMessage(err) => {
+                    if let Err(send_err) = self.reject(&err, None).await {
+                        return ConnectionCloseReason::Io(send_err);
                     }
+                    return ConnectionCloseReason::InvalidMessage(err);
                 }
-                Some(pending) = self.request_rx.recv() => {
-                    let cseq = self.next_cseq;
-                    self.next_cseq = self.next_cseq.wrapping_add(1);
-
-                    let request = pending.request.with_cseq(cseq);
-                    log::debug!("[rtsp] request to {}:\n{request}", self.peer_addr);
-
-                    if let Err(err) = self.framed_tcp_stream.send(Message::Request(request)).await {
+                ConnectionEvent::MalformedMessage(malformed) => {
+                    self.record_activity();
+                    if let Err(err) = self.reject(&malformed.error, malformed.cseq.as_deref()).await
+                    {
                         return ConnectionCloseReason::Io(err);
                     }
-                    self.pending_responses.insert(cseq, pending.response_tx);
+                }
+                ConnectionEvent::RequestReceived(request) => {
+                    self.record_activity();
+                    if let Err(err) = self.on_request_received(request).await {
+                        return ConnectionCloseReason::Io(err);
+                    }
+                }
+                ConnectionEvent::ResponseReceived(response) => {
+                    self.record_activity();
+                    self.on_response_received(response);
+                }
+                ConnectionEvent::RequestQueued(pending) => {
+                    if let Err(err) = self.on_request_queued(pending).await {
+                        return ConnectionCloseReason::Io(err);
+                    }
                 }
             }
+        }
+    }
+
+    async fn next_event(&mut self) -> ConnectionEvent {
+        tokio::select! {
+            () = self.cancellation_token.cancelled() => ConnectionEvent::Cancelled,
+            () = &mut self.idle_timer, if self.options.idle_timeout().is_some() => {
+                ConnectionEvent::IdleTimeout
+            }
+            message = self.framed_tcp_stream.next() => match message {
+                None => ConnectionEvent::ClosedByPeer,
+                Some(Ok(Ok(Message::Request(request)))) => {
+                    ConnectionEvent::RequestReceived(request)
+                }
+                Some(Ok(Ok(Message::Response(response)))) => {
+                    ConnectionEvent::ResponseReceived(response)
+                }
+                Some(Ok(Err(malformed))) => ConnectionEvent::MalformedMessage(malformed),
+                Some(Err(MessageError::Io(err))) => ConnectionEvent::ReadFailed(err),
+                Some(Err(err)) => ConnectionEvent::InvalidMessage(err),
+            },
+            Some(pending) = self.request_rx.recv() => ConnectionEvent::RequestQueued(pending),
+        }
+    }
+
+    async fn on_request_received(&mut self, request: Request) -> std::io::Result<()> {
+        let response = self.handler.handle(&request);
+        let response = match request.headers().get(CSEQ) {
+            Some(cseq) => response.with_cseq(cseq),
+            None => response,
+        };
+        log::debug!("[rtsp] response to {}:\n{response}", self.peer_addr);
+
+        self.framed_tcp_stream.send(Message::Response(response)).await
+    }
+
+    fn on_response_received(&mut self, response: Response) {
+        let response_tx = response
+            .headers()
+            .get(CSEQ)
+            .and_then(|cseq| cseq.parse::<u32>().ok())
+            .and_then(|cseq| self.pending_responses.remove(&cseq));
+
+        match response_tx {
+            Some(response_tx) => {
+                if response_tx.send(response).is_err() {
+                    log::debug!(
+                        "[rtsp] response from {} arrived after its request was abandoned",
+                        self.peer_addr
+                    );
+                }
+            }
+            None => {
+                log::warn!("[rtsp] response from {} matches no pending request", self.peer_addr)
+            }
+        }
+    }
+
+    async fn on_request_queued(&mut self, pending: PendingRequest) -> std::io::Result<()> {
+        let cseq = self.next_cseq;
+        self.next_cseq = self.next_cseq.wrapping_add(1);
+
+        let request = pending.request.with_cseq(cseq);
+        log::debug!("[rtsp] request to {}:\n{request}", self.peer_addr);
+
+        self.framed_tcp_stream.send(Message::Request(request)).await?;
+        self.pending_responses.insert(cseq, pending.response_tx);
+
+        Ok(())
+    }
+
+    fn record_activity(&mut self) {
+        self.reset_idle_timer();
+        if let Some(activity_hook) = self.options.activity_hook() {
+            activity_hook(self.peer_addr);
+        }
+    }
+
+    fn reset_idle_timer(&mut self) {
+        if let Some(idle_timeout) = self.options.idle_timeout() {
+            self.idle_timer.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
         }
     }
 

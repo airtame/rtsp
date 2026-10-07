@@ -1,4 +1,5 @@
 use super::*;
+use crate::message::CSeqHeader;
 
 fn parse(lines: &str) -> MessageHeaders {
     MessageHeaders::try_from(lines.as_bytes()).expect("headers should be valid")
@@ -48,6 +49,34 @@ fn get_all_returns_nothing_for_missing_header() {
     let headers = parse("CSeq: 1");
 
     assert_eq!(headers.get_all("Public").count(), 0);
+}
+
+#[test]
+fn typed_decodes_header() {
+    let headers = parse("CSeq: 7");
+
+    let cseq = headers.typed::<CSeqHeader>().expect("CSeq should be present");
+
+    assert_eq!(cseq.expect("CSeq should be valid"), CSeqHeader(7));
+}
+
+#[test]
+fn typed_returns_none_for_missing_header() {
+    let headers = parse("Session: 12345678");
+
+    assert!(headers.typed::<CSeqHeader>().is_none());
+}
+
+#[test]
+fn typed_returns_error_for_invalid_value() {
+    let headers = parse("CSeq: abc");
+
+    let cseq = headers.typed::<CSeqHeader>().expect("CSeq should be present");
+
+    assert!(
+        matches!(&cseq, Err(MessageError::InvalidHeaderValue(MessageHeaderName::CSeq, value)) if value == "abc"),
+        "unexpected result: {cseq:?}"
+    );
 }
 
 #[test]

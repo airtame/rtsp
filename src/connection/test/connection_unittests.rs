@@ -161,7 +161,7 @@ async fn next_event_returns_malformed_message_for_invalid_start_line() {
 
     let event = next_event(&mut connection).await;
     assert!(
-        matches!(&event, ConnectionEvent::MalformedMessage(malformed) if malformed.cseq.as_deref() == Some("1")),
+        matches!(&event, ConnectionEvent::MalformedMessage(malformed) if malformed.cseq == Some(CSeqHeader(1))),
         "unexpected event: {event:?}"
     );
 }
@@ -588,6 +588,21 @@ async fn run_copies_cseq_into_response_of_any_handler() {
     });
 
     assert_eq!(response, expected);
+}
+
+#[tokio::test]
+async fn run_answers_request_with_invalid_cseq_without_cseq() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+    let not_found = "RTSP/1.0 404 Not Found\r\n\r\n";
+
+    let (_, response) = tokio::join!(run_until_closed(connection), async {
+        client.write_all(b"OPTIONS * RTSP/1.0\r\nCSeq: abc\r\n\r\n").await.expect("write failed");
+        let response = read_response(&mut client, not_found.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, not_found);
 }
 
 #[tokio::test]

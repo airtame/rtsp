@@ -75,6 +75,8 @@ Known gaps in the codec (no limit on header size or `Content-Length`, and EOF in
 
 **MethodRouter.** `MethodRouter` maps a `RequestMethod` to a handler. It is built with `with_method` and `with_fallback` and doesn't change afterwards. A method with no handler goes to the fallback, or gets `405` with an `Allow` header listing the registered methods in sorted order. It ignores the path, so used as a `Router` fallback it handles a method on any path (such as `SETUP` on a per-session URI), and registered for a path it limits which methods that path accepts. `"*"` is not a wildcard route: it is the path of `OPTIONS * RTSP/1.0`.
 
+**Typed headers.** A type implementing `MessageHeader` has a `NAME` (a `MessageHeaderName`), `decode` from one header value, and `encode` back to one. `MessageHeaders::typed::<H>()` returns `None` if the header is missing and `Some(Err(MessageError::InvalidHeaderValue(..)))` if its value is invalid. `Request::with_typed_header` and `Response::with_typed_header` replace an existing header of the same name unless `allows_multiple()` is true, in which case they append. `CSeqHeader(u32)` and `SessionHeader { id, timeout }` are the first ones, and the crate reads and writes `CSeq` only through `CSeqHeader`, so a `CSeq` that isn't a number is never echoed.
+
 **Encoding.** `MessageHeaders::encode` always writes `Content-Length` from the actual body length. It overwrites any value the handler set, and it adds the header when the body is non-empty.
 
 ## Conventions

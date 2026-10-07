@@ -1,5 +1,6 @@
 use crate::message::{
-    MessageError, MessageHeaderName, MessageHeaders, ParsingMode, StatusCode, Version,
+    MessageError, MessageHeader, MessageHeaderName, MessageHeaders, ParsingMode, StatusCode,
+    Version,
 };
 
 #[derive(Debug)]
@@ -40,18 +41,12 @@ impl Response {
         self
     }
 
-    pub(crate) fn with_replaced_header(mut self, name: MessageHeaderName, value: &str) -> Self {
-        self.headers.remove(&name);
-        self.headers.append(name, value.to_owned());
-        self
-    }
-
-    pub(crate) fn with_cseq(self, cseq: &str) -> Self {
-        if cseq.is_empty() || !cseq.bytes().all(|byte| byte.is_ascii_digit()) {
-            return self;
+    pub fn with_typed_header<H: MessageHeader>(mut self, header: H) -> Self {
+        if !H::NAME.allows_multiple() {
+            self.headers.remove(&H::NAME);
         }
-
-        self.with_replaced_header(MessageHeaderName::CSeq, cseq)
+        self.headers.append(H::NAME, header.encode());
+        self
     }
 
     pub(crate) fn parse(

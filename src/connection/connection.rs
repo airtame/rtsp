@@ -4,7 +4,7 @@ use crate::connection::{
     ConnectionCloseReason, ConnectionEvent, ConnectionHandle, ConnectionOptions, PendingRequest,
 };
 use crate::message::{
-    Message, MessageCodec, MessageError, MessageHeaderName, Request, Response, StatusCode, Version,
+    CSeqHeader, Message, MessageCodec, MessageError, Request, Response, StatusCode, Version,
 };
 use crate::router::RequestHandler;
 
@@ -81,8 +81,7 @@ impl Connection {
                 }
                 ConnectionEvent::MalformedMessage(malformed) => {
                     self.record_activity();
-                    if let Err(err) = self.reject(&malformed.error, malformed.cseq.as_deref()).await
-                    {
+                    if let Err(err) = self.reject(&malformed.error, malformed.cseq).await {
                         return ConnectionCloseReason::Io(err);
                     }
                 }
@@ -129,9 +128,9 @@ impl Connection {
 
     async fn on_request_received(&mut self, request: Request) -> std::io::Result<()> {
         let response = self.handler.handle(&request);
-        let response = match request.headers().get(MessageHeaderName::CSeq) {
-            Some(cseq) => response.with_cseq(cseq),
-            None => response,
+        let response = match request.headers().typed::<CSeqHeader>() {
+            Some(Ok(cseq)) => response.with_typed_header(cseq),
+            _ => response,
         };
         log::debug!("[rtsp] response to {}:\n{response}", self.peer_addr);
 
@@ -141,9 +140,9 @@ impl Connection {
     fn on_response_received(&mut self, response: Response) {
         let response_tx = response
             .headers()
-            .get(MessageHeaderName::CSeq)
-            .and_then(|cseq| cseq.parse::<u32>().ok())
-            .and_then(|cseq| self.pending_responses.remove(&cseq));
+            .typed::<CSeqHeader>()
+            .and_then(Result::ok)
+            .and_then(|CSeqHeader(cseq)| self.pending_responses.remove(&cseq));
 
         match response_tx {
             Some(response_tx) => {
@@ -164,7 +163,7 @@ impl Connection {
         let cseq = self.next_cseq;
         self.next_cseq = self.next_cseq.wrapping_add(1);
 
-        let request = pending.request.with_cseq(cseq);
+        let request = pending.request.with_typed_header(CSeqHeader(cseq));
         log::debug!("[rtsp] request to {}:\n{request}", self.peer_addr);
 
         self.framed_tcp_stream.send(Message::Request(request)).await?;
@@ -186,12 +185,16 @@ impl Connection {
         }
     }
 
-    async fn reject(&mut self, error: &MessageError, cseq: Option<&str>) -> std::io::Result<()> {
+    async fn reject(
+        &mut self,
+        error: &MessageError,
+        cseq: Option<CSeqHeader>,
+    ) -> std::io::Result<()> {
         log::error!("[rtsp] rejecting message from {}: {error}", self.peer_addr);
 
         let mut response = Response::new(Version::V1, StatusCode::BadRequest);
         if let Some(cseq) = cseq {
-            response = response.with_cseq(cseq);
+            response = response.with_typed_header(cseq);
         }
 
         self.framed_tcp_stream.send(Message::Response(response)).await

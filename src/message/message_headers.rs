@@ -1,4 +1,4 @@
-use crate::message::{MessageError, MessageHeaderName};
+use crate::message::{MessageError, MessageHeader, MessageHeaderName};
 
 const CRLF: &str = "\r\n";
 
@@ -24,6 +24,10 @@ impl MessageHeaders {
             .iter()
             .filter(move |(field_name, _)| *field_name == name)
             .map(|(_, value)| value.as_str())
+    }
+
+    pub fn typed<H: MessageHeader>(&self) -> Option<Result<H, MessageError>> {
+        self.get(H::NAME).map(H::decode)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&MessageHeaderName, &str)> {

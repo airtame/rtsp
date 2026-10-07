@@ -1,5 +1,6 @@
 use crate::message::{
-    MessageError, MessageHeaderName, MessageHeaders, ParsingMode, RequestMethod, Version,
+    MessageError, MessageHeader, MessageHeaderName, MessageHeaders, ParsingMode, RequestMethod,
+    Version,
 };
 
 #[derive(Debug)]
@@ -47,9 +48,11 @@ impl Request {
         self
     }
 
-    pub(crate) fn with_cseq(mut self, cseq: u32) -> Self {
-        self.headers.remove(&MessageHeaderName::CSeq);
-        self.headers.append(MessageHeaderName::CSeq, cseq.to_string());
+    pub fn with_typed_header<H: MessageHeader>(mut self, header: H) -> Self {
+        if !H::NAME.allows_multiple() {
+            self.headers.remove(&H::NAME);
+        }
+        self.headers.append(H::NAME, header.encode());
         self
     }
 

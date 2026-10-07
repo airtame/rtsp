@@ -391,7 +391,7 @@ fn decode_returns_malformed_message_for_invalid_request_line() {
         "unexpected error: {:?}",
         malformed.error
     );
-    assert_eq!(malformed.cseq.as_deref(), Some("1"));
+    assert_eq!(malformed.cseq, Some(CSeqHeader(1)));
     assert!(src.is_empty());
 }
 
@@ -406,12 +406,21 @@ fn decode_returns_malformed_message_for_invalid_status_line() {
         "unexpected error: {:?}",
         malformed.error
     );
-    assert_eq!(malformed.cseq.as_deref(), Some("1"));
+    assert_eq!(malformed.cseq, Some(CSeqHeader(1)));
 }
 
 #[test]
 fn decode_returns_malformed_message_without_cseq() {
     let mut src = buffer(b"OPTIONS\r\n\r\n");
+
+    let malformed = decode_malformed(&mut src);
+
+    assert_eq!(malformed.cseq, None);
+}
+
+#[test]
+fn decode_returns_malformed_message_without_cseq_when_cseq_is_not_a_number() {
+    let mut src = buffer(b"OPTIONS\r\nCSeq: abc\r\n\r\n");
 
     let malformed = decode_malformed(&mut src);
 
@@ -444,7 +453,7 @@ fn decode_returns_malformed_message_for_other_protocol_version_in_strict_mode() 
         "unexpected error: {:?}",
         malformed.error
     );
-    assert_eq!(malformed.cseq.as_deref(), Some("1"));
+    assert_eq!(malformed.cseq, Some(CSeqHeader(1)));
     assert!(src.is_empty());
 }
 

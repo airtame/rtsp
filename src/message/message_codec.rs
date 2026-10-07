@@ -1,5 +1,6 @@
 use crate::message::{
-    MalformedMessage, Message, MessageError, MessageHeaderName, MessageHeaders, ParsingMode,
+    CSeqHeader, MalformedMessage, Message, MessageError, MessageHeaderName, MessageHeaders,
+    ParsingMode,
 };
 
 const CRLF: &[u8] = b"\r\n";
@@ -45,7 +46,7 @@ impl tokio_util::codec::Decoder for MessageCodec {
         let raw_message = src.split_to(message_length).freeze();
         let start_line = &raw_message[..start_line_length];
         let body = raw_message.slice(message_head_end + DOUBLE_CRLF.len()..);
-        let cseq = headers.get(MessageHeaderName::CSeq).map(str::to_owned);
+        let cseq = headers.typed::<CSeqHeader>().and_then(Result::ok);
         let has_repeated_single_value_header = {
             let mut seen_names = std::collections::HashSet::new();
             headers.iter().any(|(name, _)| !name.allows_multiple() && !seen_names.insert(name))

@@ -34,9 +34,73 @@ Asynchronous RTSP 1.0/2.0 server and client connections, with request routing, b
 > requests without `CSeq`. An optional activity hook (`ConnectionOptions::with_activity_hook`)
 > is called with the peer address each time a complete message arrives.
 
-## Building, running and testing
+## Quick start
 
-Requires Rust 1.85 or newer (edition 2024).
+```toml
+[dependencies]
+rtsp = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+```
+
+A server that answers every request for `/stream` with an SDP description until Ctrl+C is
+pressed:
+
+```rust,no_run
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let router = rtsp::Router::new();
+    router.register("/stream", |request: &rtsp::Request| {
+        rtsp::Response::new(request.version().clone(), rtsp::StatusCode::Ok)
+            .with_header("Content-Type", "application/sdp")
+            .with_body("v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=Example\r\nt=0 0\r\n")
+    });
+
+    let server = rtsp::Server::new().with_handler(router);
+    let (handle, task) = server.bind("127.0.0.1:8554".parse()?)?;
+    println!("Listening on rtsp://{}", handle.local_addr());
+
+    let task = tokio::spawn(task);
+    tokio::signal::ctrl_c().await?;
+    handle.stop();
+    task.await?;
+
+    Ok(())
+}
+```
+
+A client that sends it a `DESCRIBE` request and prints the response:
+
+```rust,no_run
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let (handle, task) = rtsp::Client::new().connect("127.0.0.1:8554".parse()?).await?;
+    let task = tokio::spawn(task);
+
+    let request = rtsp::Request::new(
+        rtsp::RequestMethod::Describe,
+        "rtsp://127.0.0.1:8554/stream",
+        rtsp::Version::V1,
+    );
+    let response = handle.send(request).await?;
+    println!("{response}");
+
+    handle.close();
+    println!("Connection closed: {}", task.await?);
+
+    Ok(())
+}
+```
+
+`Server::with_delegate` is told about each new connection, with its `ConnectionHandle`, and
+about each closed one. `Server::with_connection_options` and `Client::with_connection_options`
+set the idle timeout, the parsing mode and the activity hook. The [examples](#examples) show
+them together with `MethodRouter` and router fallbacks.
+
+## Minimum supported Rust version
+
+Rust 1.85, the first release with edition 2024.
+
+## Building, running and testing
 
 ```sh
 cargo build             # debug build
@@ -110,4 +174,4 @@ connection.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see the `LICENSE` file.

@@ -2,11 +2,23 @@
 name = "rtsp"
 description = "Asynchronous RTSP 1.0/2.0 server and client connections, with request routing"
 version = "0.1.0"
+authors = ["András Tokodi <andras.tokodi@airtame.com>"]
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
+homepage = "https://airtame.com/"
+repository = "https://github.com/airtame/rtsp"
 readme = "README.md"
 keywords = ["rtsp", "streaming", "tokio", "async", "protocol"]
 categories = ["network-programming", "multimedia", "asynchronous"]
+exclude = [
+    "/.gitignore",
+    "/.gitlab-ci.yml",
+    "/CLAUDE.md",
+    "/TODO.md",
+    "/rustfmt.toml",
+    "/src/**/test/",
+]
 
 [lints.rust]
 unreachable_pub = "warn"

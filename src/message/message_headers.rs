@@ -9,8 +9,6 @@ pub struct MessageHeaders {
 }
 
 impl MessageHeaders {
-    // TODO(atokodi): If there are multiple headers with the same name this will only return the
-    // first one.
     pub fn get(&self, name: &str) -> Option<&str> {
         self.fields
             .iter()
@@ -23,7 +21,6 @@ impl MessageHeaders {
     }
 
     pub(crate) fn append(&mut self, name: String, value: String) {
-        // TODO(atokodi): Not sure about these asserts. Should return a Result instead?
         assert!(
             !name.is_empty() && !name.contains([':', '\r', '\n']),
             "invalid header name: {name:?}"

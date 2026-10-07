@@ -17,11 +17,12 @@ cargo build --release
 cargo test
 ```
 
-Test paths follow `<module>::<file>::tests::<name>`:
+Test paths follow `<module>::<file>::tests::<name>`, with the group in between for files in `src/message/<group>/`:
 
 ```sh
 cargo test run_answers_pipelined_requests_in_order   # single test by name
 cargo test connection::connection::tests::            # one file's tests
+cargo test message::header::                          # one group under src/message
 cargo test message::                                  # everything under src/message
 ```
 
@@ -40,6 +41,8 @@ printf 'GET_PARAMETER rtsp://127.0.0.1:8554/ RTSP/1.0\r\nCSeq: 1\r\n\r\n' | nc -
 ## Architecture
 
 `src/lib.rs` declares five private modules (`server`, `client`, `connection`, `message`, `router`) and re-exports the public API.
+
+`message` is split into groups, each a subdirectory with its own `mod.rs` and `test/`: `codec` (`MessageCodec`, `MalformedMessage`), `header` (`MessageHeader`, `MessageHeaderName`, `MessageHeaders` and the typed headers), `request` (`Request`, `RequestMethod`) and `response` (`Response`, `StatusCode`). The types shared by several groups (`Message`, `MessageError`, `ParsingMode`, `Version`) stay in `message/` itself. `message/mod.rs` re-exports every type, so code always imports `crate::message::X`, never a group path. New typed headers go in `header/`.
 
 **Request flow.** `Server` is configuration only, like `Client`: the handler, the delegate and the `ConnectionOptions`. `Server::bind(&self, addr)` binds a `TcpListener` and builds a crate-private `ServerLoop` from it and the configuration. It returns a `ServerHandle` (with the bound `local_addr`) and a `ServerTask`, a public boxed future around `ServerLoop::run` that the embedder must await or spawn, like the client's `ConnectionTask`. Because `bind` takes `&self`, one configuration can be bound to several addresses. The loop accepts TCP connections and builds a `Connection` for each one, using the `ConnectionOptions` (idle timeout, `ParsingMode`) set with `Server::with_connection_options` (the defaults otherwise). It passes the connection's `ConnectionHandle` to `ServerDelegate::on_new_connection` of the delegate set with `Server::with_delegate` (`()` by default), then spawns `Connection::run` in its `JoinSet`. `ServerLoop::next_event()` holds the only `select!` and maps each source to a `ServerEvent`, and `ServerLoop::run` logs each event once and matches on it. `Connection` wraps the stream in `Framed<TcpStream, MessageCodec>`. Its loop has the same shape: `Connection::next_event()` maps the cancellation token, the idle timer, the decoded stream and the request channel to a `ConnectionEvent`, and `Connection::run` logs each event once and matches on it. Each decoded request goes to the connection's `Arc<dyn RequestHandler>`. The server passes the handler set with `Server::with_handler`, an empty `Router` by default. `Connection` then copies the request's `CSeq` onto the response and writes it back. Copying `CSeq` in `Connection` means it applies to every handler, not just the router.
 

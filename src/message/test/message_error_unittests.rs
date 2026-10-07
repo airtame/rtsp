@@ -1,6 +1,13 @@
 use super::*;
 
 #[test]
+fn display_invalid_header_value_names_header_and_quotes_value() {
+    let err = MessageError::InvalidHeaderValue(MessageHeaderName::CSeq, "abc".to_owned());
+
+    assert_eq!(err.to_string(), r#"invalid CSeq header value: "abc""#);
+}
+
+#[test]
 fn display_io_includes_underlying_error() {
     let err = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset by test");
 

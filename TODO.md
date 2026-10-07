@@ -39,13 +39,17 @@
   closes as `Io` instead of `ClosedByPeer`.
 - Find a better way to split the start line from the headers than `split_start_line` in
   `message_codec.rs`.
+- Decide what to do with a message that repeats a single-value header (two `CSeq` or `Session`
+  lines, say) and with its connection. `MessageCodec::decode` only logs a warning with the
+  message and passes it on, so the handler sees the first value. It could instead answer
+  `400 Bad Request` and keep the connection open, or close the connection as it does when
+  `Content-Length` repeats.
 
 ## Messages
 
 - Always write `Content-Length` in `Response::encode` (0 for an empty body), except for 1xx, 204
   and 304 responses. Without it an HTTP client in lenient mode reads the body until the
   connection closes, so it waits for the idle timeout.
-- `MessageHeaders::get` returns only the first header when several have the same name.
 - `MessageHeaders::append` panics on an invalid header name or value. Should it return a
   `Result` instead?
 - Rename `MessageError` to `HeaderError` and add a separate `MessageError`? Or use

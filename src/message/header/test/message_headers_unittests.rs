@@ -1,4 +1,5 @@
 use super::*;
+use crate::message::CSeqHeader;
 
 fn parse(lines: &str) -> MessageHeaders {
     MessageHeaders::try_from(lines.as_bytes()).expect("headers should be valid")
@@ -10,6 +11,88 @@ fn try_from_parses_name_value_pairs() {
 
     assert_eq!(headers.get("CSeq"), Some("1"));
     assert_eq!(headers.get("Session"), Some("12345678"));
+}
+
+#[test]
+fn get_accepts_header_name() {
+    let headers = parse("CSeq: 1\r\nX-Custom: a");
+
+    assert_eq!(headers.get(MessageHeaderName::CSeq), Some("1"));
+    assert_eq!(headers.get(MessageHeaderName::Extension("x-custom".to_owned())), Some("a"));
+}
+
+#[test]
+fn get_ignores_case_of_name() {
+    let headers = parse("cseq: 1");
+
+    assert_eq!(headers.get("CSEQ"), Some("1"));
+}
+
+#[test]
+fn get_returns_first_of_repeated_values() {
+    let headers = parse("Public: OPTIONS\r\nPublic: DESCRIBE");
+
+    assert_eq!(headers.get(MessageHeaderName::Public), Some("OPTIONS"));
+}
+
+#[test]
+fn get_all_returns_every_value_in_order() {
+    let headers = parse("Public: OPTIONS\r\nCSeq: 1\r\npublic: DESCRIBE");
+
+    let values = headers.get_all(MessageHeaderName::Public).collect::<Vec<_>>();
+
+    assert_eq!(values, ["OPTIONS", "DESCRIBE"]);
+}
+
+#[test]
+fn get_all_returns_nothing_for_missing_header() {
+    let headers = parse("CSeq: 1");
+
+    assert_eq!(headers.get_all("Public").count(), 0);
+}
+
+#[test]
+fn typed_decodes_header() {
+    let headers = parse("CSeq: 7");
+
+    let cseq = headers.typed::<CSeqHeader>().expect("CSeq should be present");
+
+    assert_eq!(cseq.expect("CSeq should be valid"), CSeqHeader(7));
+}
+
+#[test]
+fn typed_returns_none_for_missing_header() {
+    let headers = parse("Session: 12345678");
+
+    assert!(headers.typed::<CSeqHeader>().is_none());
+}
+
+#[test]
+fn typed_returns_error_for_invalid_value() {
+    let headers = parse("CSeq: abc");
+
+    let cseq = headers.typed::<CSeqHeader>().expect("CSeq should be present");
+
+    assert!(
+        matches!(&cseq, Err(MessageError::InvalidHeaderValue(MessageHeaderName::CSeq, value)) if value == "abc"),
+        "unexpected result: {cseq:?}"
+    );
+}
+
+#[test]
+fn iter_returns_every_header_in_order() {
+    let headers = parse("CSeq: 1\r\nX-Custom: a\r\npublic: OPTIONS");
+
+    let fields = headers.iter().collect::<Vec<_>>();
+
+    assert_eq!(
+        fields,
+        [
+            (&MessageHeaderName::CSeq, "1"),
+            (&MessageHeaderName::Extension("X-Custom".to_owned()), "a"),
+            (&MessageHeaderName::Public, "OPTIONS")
+        ]
+    );
 }
 
 #[test]
@@ -44,7 +127,7 @@ fn try_from_returns_no_headers_for_empty_input() {
 fn try_from_ignores_trailing_line_terminator() {
     let headers = parse("CSeq: 1\r\n");
 
-    assert_eq!(headers.fields, [("CSeq".to_owned(), "1".to_owned())]);
+    assert_eq!(headers.fields, [(MessageHeaderName::CSeq, "1".to_owned())]);
 }
 
 #[test]
@@ -53,7 +136,10 @@ fn try_from_keeps_repeated_headers_in_order() {
 
     assert_eq!(
         headers.fields,
-        [("Public".to_owned(), "OPTIONS".to_owned()), ("Public".to_owned(), "DESCRIBE".to_owned())]
+        [
+            (MessageHeaderName::Public, "OPTIONS".to_owned()),
+            (MessageHeaderName::Public, "DESCRIBE".to_owned())
+        ]
     );
 }
 
@@ -190,10 +276,24 @@ fn encode_replaces_content_length_with_body_length() {
 }
 
 #[test]
-fn encode_keeps_position_and_name_of_content_length() {
+fn encode_keeps_position_of_content_length_and_writes_its_standard_name() {
     let headers = parse("CSeq: 1\r\ncontent-length: 5\r\nSession: 12345678");
 
-    assert_eq!(encode(&headers, 5), "CSeq: 1\r\ncontent-length: 5\r\nSession: 12345678\r\n");
+    assert_eq!(encode(&headers, 5), "CSeq: 1\r\nContent-Length: 5\r\nSession: 12345678\r\n");
+}
+
+#[test]
+fn encode_writes_standard_spelling_of_known_names() {
+    let headers = parse("cseq: 1\r\nWWW-AUTHENTICATE: Basic");
+
+    assert_eq!(encode(&headers, 0), "CSeq: 1\r\nWWW-Authenticate: Basic\r\n");
+}
+
+#[test]
+fn encode_keeps_spelling_of_extension_names() {
+    let headers = parse("x-Custom: 1");
+
+    assert_eq!(encode(&headers, 0), "x-Custom: 1\r\n");
 }
 
 #[test]

@@ -1,3 +1,5 @@
+use crate::message::MessageHeaderName;
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum MessageError {
@@ -5,6 +7,7 @@ pub enum MessageError {
     InvalidContentLength(String),
     InvalidEncoding(String),
     InvalidHeader(String),
+    InvalidHeaderValue(MessageHeaderName, String),
     InvalidRequestLine(String),
     InvalidStatusLine(String),
     MissingHeader(String),
@@ -17,6 +20,9 @@ impl std::fmt::Display for MessageError {
             Self::InvalidContentLength(value) => write!(f, "invalid Content-Length: {value:?}"),
             Self::InvalidEncoding(text) => write!(f, "invalid encoding, expected UTF-8: {text:?}"),
             Self::InvalidHeader(line) => write!(f, "invalid header: {line:?}"),
+            Self::InvalidHeaderValue(name, value) => {
+                write!(f, "invalid {name} header value: {value:?}")
+            }
             Self::InvalidRequestLine(line) => write!(f, "invalid request line: {line:?}"),
             Self::InvalidStatusLine(line) => write!(f, "invalid status line: {line:?}"),
             Self::MissingHeader(name) => write!(f, "missing header: {name:?}"),

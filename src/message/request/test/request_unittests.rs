@@ -1,4 +1,5 @@
 use super::*;
+use crate::message::CSeqHeader;
 
 fn parse(
     start_line: &[u8],
@@ -265,11 +266,11 @@ fn with_body_replaces_previous_body() {
 }
 
 #[test]
-fn with_cseq_replaces_cseq_in_any_case_and_moves_it_last() {
+fn with_typed_header_replaces_single_value_header_in_any_case_and_moves_it_last() {
     let request = Request::new(RequestMethod::Options, "*", Version::V1)
         .with_header("cseq", "99")
         .with_header("Session", "12345678")
-        .with_cseq(1);
+        .with_typed_header(CSeqHeader(1));
 
     assert_eq!(request.headers().to_string(), "Session: 12345678\nCSeq: 1");
 }
@@ -279,7 +280,7 @@ fn created_request_encodes_to_request_line_headers_and_body() {
     let request = Request::new(RequestMethod::Announce, "rtsp://example.com/stream", Version::V1)
         .with_header("Content-Type", "application/sdp")
         .with_body("v=0\r\n")
-        .with_cseq(3);
+        .with_typed_header(CSeqHeader(3));
     let mut dst = tokio_util::bytes::BytesMut::new();
 
     request.encode(&mut dst);

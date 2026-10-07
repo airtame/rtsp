@@ -1,7 +1,5 @@
-use crate::message::{Request, RequestMethod, Response, StatusCode};
+use crate::message::{MessageHeaderName, Request, RequestMethod, Response, StatusCode};
 use crate::router::RequestHandler;
-
-const ALLOW: &str = "Allow";
 
 type Handlers = std::collections::HashMap<RequestMethod, std::sync::Arc<dyn RequestHandler>>;
 
@@ -51,7 +49,7 @@ impl RequestHandler for MethodRouter {
         match self.handlers.get(request.method()).or(self.fallback.as_ref()) {
             Some(handler) => handler.handle(request),
             None => Response::new(request.version().clone(), StatusCode::MethodNotAllowed)
-                .with_header(ALLOW, self.methods().join(", ")),
+                .with_header(MessageHeaderName::Allow, self.methods().join(", ")),
         }
     }
 }

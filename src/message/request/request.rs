@@ -1,6 +1,7 @@
-use crate::message::{MessageError, MessageHeaders, ParsingMode, RequestMethod, Version};
-
-const CSEQ: &str = "CSeq";
+use crate::message::{
+    MessageError, MessageHeader, MessageHeaderName, MessageHeaders, ParsingMode, RequestMethod,
+    Version,
+};
 
 #[derive(Debug)]
 pub struct Request {
@@ -33,7 +34,11 @@ impl Request {
         }
     }
 
-    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn with_header(
+        mut self,
+        name: impl Into<MessageHeaderName>,
+        value: impl Into<String>,
+    ) -> Self {
         self.headers.append(name.into(), value.into());
         self
     }
@@ -43,9 +48,11 @@ impl Request {
         self
     }
 
-    pub(crate) fn with_cseq(mut self, cseq: u32) -> Self {
-        self.headers.remove(CSEQ);
-        self.headers.append(CSEQ.to_owned(), cseq.to_string());
+    pub fn with_typed_header<H: MessageHeader>(mut self, header: H) -> Self {
+        if !H::NAME.allows_multiple() {
+            self.headers.remove(&H::NAME);
+        }
+        self.headers.append(H::NAME, header.encode());
         self
     }
 
@@ -73,8 +80,8 @@ impl Request {
         if parsing_mode == ParsingMode::Strict && matches!(version, Version::Other(_)) {
             return Err(invalid_request_line());
         }
-        if parsing_mode == ParsingMode::Strict && headers.get(CSEQ).is_none() {
-            return Err(MessageError::MissingHeader(CSEQ.to_owned()));
+        if parsing_mode == ParsingMode::Strict && headers.get(MessageHeaderName::CSeq).is_none() {
+            return Err(MessageError::MissingHeader(MessageHeaderName::CSeq.to_string()));
         }
 
         Ok(Self { method, uri: uri.to_owned(), path, query, version, headers, body })

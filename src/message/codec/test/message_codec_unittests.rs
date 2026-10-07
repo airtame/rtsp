@@ -169,7 +169,7 @@ fn decode_reads_content_length_case_insensitively() {
 
     let message = decode(&mut src).expect("message should be complete");
 
-    assert_eq!(message.to_string(), "RTSP/1.0 200 OK\ncontent-length: 5\n\nhello");
+    assert_eq!(message.to_string(), "RTSP/1.0 200 OK\nContent-Length: 5\n\nhello");
     assert!(src.is_empty());
 }
 
@@ -192,6 +192,30 @@ fn decode_returns_error_for_invalid_content_length() {
 
     assert!(
         matches!(&err, MessageError::InvalidContentLength(value) if value == "abc"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn decode_returns_error_for_repeated_content_length() {
+    let mut src = buffer(b"RTSP/1.0 200 OK\r\nContent-Length: 5\r\ncontent-length: 5\r\n\r\nhello");
+
+    let err = decode_err(&mut src);
+
+    assert!(
+        matches!(&err, MessageError::InvalidContentLength(value) if value == "5, 5"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn decode_returns_error_for_conflicting_content_lengths() {
+    let mut src = buffer(b"RTSP/1.0 200 OK\r\nContent-Length: 5\r\ncontent-length: 7\r\n\r\nhello");
+
+    let err = decode_err(&mut src);
+
+    assert!(
+        matches!(&err, MessageError::InvalidContentLength(value) if value == "5, 7"),
         "unexpected error: {err:?}"
     );
 }
@@ -367,7 +391,7 @@ fn decode_returns_malformed_message_for_invalid_request_line() {
         "unexpected error: {:?}",
         malformed.error
     );
-    assert_eq!(malformed.cseq.as_deref(), Some("1"));
+    assert_eq!(malformed.cseq, Some(CSeqHeader(1)));
     assert!(src.is_empty());
 }
 
@@ -382,12 +406,21 @@ fn decode_returns_malformed_message_for_invalid_status_line() {
         "unexpected error: {:?}",
         malformed.error
     );
-    assert_eq!(malformed.cseq.as_deref(), Some("1"));
+    assert_eq!(malformed.cseq, Some(CSeqHeader(1)));
 }
 
 #[test]
 fn decode_returns_malformed_message_without_cseq() {
     let mut src = buffer(b"OPTIONS\r\n\r\n");
+
+    let malformed = decode_malformed(&mut src);
+
+    assert_eq!(malformed.cseq, None);
+}
+
+#[test]
+fn decode_returns_malformed_message_without_cseq_when_cseq_is_not_a_number() {
+    let mut src = buffer(b"OPTIONS\r\nCSeq: abc\r\n\r\n");
 
     let malformed = decode_malformed(&mut src);
 
@@ -420,7 +453,7 @@ fn decode_returns_malformed_message_for_other_protocol_version_in_strict_mode() 
         "unexpected error: {:?}",
         malformed.error
     );
-    assert_eq!(malformed.cseq.as_deref(), Some("1"));
+    assert_eq!(malformed.cseq, Some(CSeqHeader(1)));
     assert!(src.is_empty());
 }
 
@@ -493,7 +526,7 @@ fn encode_normalizes_message_so_it_decodes_to_same_fields() {
         decode(&mut buffer(b"  options   *  rtsp/1.0\r\n  cseq :  7 \r\n\r\n")).expect("message");
 
     let encoded = encode(message);
-    assert_eq!(encoded, "OPTIONS * RTSP/1.0\r\ncseq: 7\r\n\r\n");
+    assert_eq!(encoded, "OPTIONS * RTSP/1.0\r\nCSeq: 7\r\n\r\n");
 
     let request = decode_request(&mut buffer(encoded.as_bytes()));
     assert_eq!(request.method(), &RequestMethod::Options);

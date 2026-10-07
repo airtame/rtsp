@@ -161,7 +161,7 @@ async fn next_event_returns_malformed_message_for_invalid_start_line() {
 
     let event = next_event(&mut connection).await;
     assert!(
-        matches!(&event, ConnectionEvent::MalformedMessage(malformed) if malformed.cseq.as_deref() == Some("1")),
+        matches!(&event, ConnectionEvent::MalformedMessage(malformed) if malformed.cseq == Some(CSeqHeader(1))),
         "unexpected event: {event:?}"
     );
 }
@@ -428,6 +428,26 @@ async fn run_returns_invalid_message_when_client_sends_malformed_header() {
 }
 
 #[tokio::test]
+async fn run_returns_invalid_message_when_client_sends_conflicting_content_lengths() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+    let bad_request = "RTSP/1.0 400 Bad Request\r\n\r\n";
+
+    client
+        .write_all(
+            b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab",
+        )
+        .await
+        .expect("client write failed");
+
+    let reason = run_until_closed(connection).await;
+    assert!(
+        matches!(&reason, ConnectionCloseReason::InvalidMessage(MessageError::InvalidContentLength(value)) if value == "1, 2"),
+        "unexpected reason: {reason:?}"
+    );
+    assert_eq!(read_response(&mut client, bad_request.len()).await, bad_request);
+}
+
+#[tokio::test]
 async fn run_answers_request_without_cseq_with_bad_request_in_strict_mode() {
     let TestConnection { mut client, connection, .. } = connect().await;
     let bad_request = "RTSP/1.0 400 Bad Request\r\n\r\n";
@@ -568,6 +588,21 @@ async fn run_copies_cseq_into_response_of_any_handler() {
     });
 
     assert_eq!(response, expected);
+}
+
+#[tokio::test]
+async fn run_answers_request_with_invalid_cseq_without_cseq() {
+    let TestConnection { mut client, connection, .. } = connect().await;
+    let not_found = "RTSP/1.0 404 Not Found\r\n\r\n";
+
+    let (_, response) = tokio::join!(run_until_closed(connection), async {
+        client.write_all(b"OPTIONS * RTSP/1.0\r\nCSeq: abc\r\n\r\n").await.expect("write failed");
+        let response = read_response(&mut client, not_found.len()).await;
+        drop(client);
+        response
+    });
+
+    assert_eq!(response, not_found);
 }
 
 #[tokio::test]

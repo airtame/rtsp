@@ -12,8 +12,8 @@ pub use connection::{
     ResponseFuture,
 };
 pub use message::{
-    MessageError, MessageHeaders, ParsingMode, Request, RequestMethod, Response, StatusCode,
-    Version,
+    MessageError, MessageHeaderName, MessageHeaders, ParsingMode, Request, RequestMethod, Response,
+    StatusCode, Version,
 };
 pub use router::{MethodRouter, RequestHandler, Router};
 pub use server::{Server, ServerDelegate, ServerHandle, ServerTask};

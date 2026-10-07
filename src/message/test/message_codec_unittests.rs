@@ -169,7 +169,7 @@ fn decode_reads_content_length_case_insensitively() {
 
     let message = decode(&mut src).expect("message should be complete");
 
-    assert_eq!(message.to_string(), "RTSP/1.0 200 OK\ncontent-length: 5\n\nhello");
+    assert_eq!(message.to_string(), "RTSP/1.0 200 OK\nContent-Length: 5\n\nhello");
     assert!(src.is_empty());
 }
 
@@ -493,7 +493,7 @@ fn encode_normalizes_message_so_it_decodes_to_same_fields() {
         decode(&mut buffer(b"  options   *  rtsp/1.0\r\n  cseq :  7 \r\n\r\n")).expect("message");
 
     let encoded = encode(message);
-    assert_eq!(encoded, "OPTIONS * RTSP/1.0\r\ncseq: 7\r\n\r\n");
+    assert_eq!(encoded, "OPTIONS * RTSP/1.0\r\nCSeq: 7\r\n\r\n");
 
     let request = decode_request(&mut buffer(encoded.as_bytes()));
     assert_eq!(request.method(), &RequestMethod::Options);

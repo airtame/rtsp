@@ -3,11 +3,12 @@ use futures_util::{SinkExt, StreamExt};
 use crate::connection::{
     ConnectionCloseReason, ConnectionEvent, ConnectionHandle, ConnectionOptions, PendingRequest,
 };
-use crate::message::{Message, MessageCodec, MessageError, Request, Response, StatusCode, Version};
+use crate::message::{
+    Message, MessageCodec, MessageError, MessageHeaderName, Request, Response, StatusCode, Version,
+};
 use crate::router::RequestHandler;
 
 const READ_BUFFER_SIZE: usize = 4096;
-const CSEQ: &str = "CSeq";
 
 pub(crate) struct Connection {
     framed_tcp_stream: tokio_util::codec::Framed<tokio::net::TcpStream, MessageCodec>,
@@ -128,7 +129,7 @@ impl Connection {
 
     async fn on_request_received(&mut self, request: Request) -> std::io::Result<()> {
         let response = self.handler.handle(&request);
-        let response = match request.headers().get(CSEQ) {
+        let response = match request.headers().get(MessageHeaderName::CSeq) {
             Some(cseq) => response.with_cseq(cseq),
             None => response,
         };
@@ -140,7 +141,7 @@ impl Connection {
     fn on_response_received(&mut self, response: Response) {
         let response_tx = response
             .headers()
-            .get(CSEQ)
+            .get(MessageHeaderName::CSeq)
             .and_then(|cseq| cseq.parse::<u32>().ok())
             .and_then(|cseq| self.pending_responses.remove(&cseq));
 

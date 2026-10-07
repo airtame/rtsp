@@ -13,6 +13,21 @@ fn try_from_parses_name_value_pairs() {
 }
 
 #[test]
+fn get_accepts_header_name() {
+    let headers = parse("CSeq: 1\r\nX-Custom: a");
+
+    assert_eq!(headers.get(MessageHeaderName::CSeq), Some("1"));
+    assert_eq!(headers.get(MessageHeaderName::Extension("x-custom".to_owned())), Some("a"));
+}
+
+#[test]
+fn get_ignores_case_of_name() {
+    let headers = parse("cseq: 1");
+
+    assert_eq!(headers.get("CSEQ"), Some("1"));
+}
+
+#[test]
 fn try_from_trims_whitespace_around_name_and_value() {
     let headers = parse("  CSeq  :   1  ");
 
@@ -44,7 +59,7 @@ fn try_from_returns_no_headers_for_empty_input() {
 fn try_from_ignores_trailing_line_terminator() {
     let headers = parse("CSeq: 1\r\n");
 
-    assert_eq!(headers.fields, [("CSeq".to_owned(), "1".to_owned())]);
+    assert_eq!(headers.fields, [(MessageHeaderName::CSeq, "1".to_owned())]);
 }
 
 #[test]
@@ -53,7 +68,10 @@ fn try_from_keeps_repeated_headers_in_order() {
 
     assert_eq!(
         headers.fields,
-        [("Public".to_owned(), "OPTIONS".to_owned()), ("Public".to_owned(), "DESCRIBE".to_owned())]
+        [
+            (MessageHeaderName::Public, "OPTIONS".to_owned()),
+            (MessageHeaderName::Public, "DESCRIBE".to_owned())
+        ]
     );
 }
 
@@ -190,10 +208,24 @@ fn encode_replaces_content_length_with_body_length() {
 }
 
 #[test]
-fn encode_keeps_position_and_name_of_content_length() {
+fn encode_keeps_position_of_content_length_and_writes_its_standard_name() {
     let headers = parse("CSeq: 1\r\ncontent-length: 5\r\nSession: 12345678");
 
-    assert_eq!(encode(&headers, 5), "CSeq: 1\r\ncontent-length: 5\r\nSession: 12345678\r\n");
+    assert_eq!(encode(&headers, 5), "CSeq: 1\r\nContent-Length: 5\r\nSession: 12345678\r\n");
+}
+
+#[test]
+fn encode_writes_standard_spelling_of_known_names() {
+    let headers = parse("cseq: 1\r\nWWW-AUTHENTICATE: Basic");
+
+    assert_eq!(encode(&headers, 0), "CSeq: 1\r\nWWW-Authenticate: Basic\r\n");
+}
+
+#[test]
+fn encode_keeps_spelling_of_extension_names() {
+    let headers = parse("x-Custom: 1");
+
+    assert_eq!(encode(&headers, 0), "x-Custom: 1\r\n");
 }
 
 #[test]

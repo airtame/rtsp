@@ -1,6 +1,6 @@
-use crate::message::{MessageError, MessageHeaders, ParsingMode, StatusCode, Version};
-
-const CSEQ: &str = "CSeq";
+use crate::message::{
+    MessageError, MessageHeaderName, MessageHeaders, ParsingMode, StatusCode, Version,
+};
 
 #[derive(Debug)]
 pub struct Response {
@@ -26,7 +26,11 @@ impl Response {
         }
     }
 
-    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn with_header(
+        mut self,
+        name: impl Into<MessageHeaderName>,
+        value: impl Into<String>,
+    ) -> Self {
         self.headers.append(name.into(), value.into());
         self
     }
@@ -36,9 +40,9 @@ impl Response {
         self
     }
 
-    pub(crate) fn with_replaced_header(mut self, name: &str, value: &str) -> Self {
-        self.headers.remove(name);
-        self.headers.append(name.to_owned(), value.to_owned());
+    pub(crate) fn with_replaced_header(mut self, name: MessageHeaderName, value: &str) -> Self {
+        self.headers.remove(&name);
+        self.headers.append(name, value.to_owned());
         self
     }
 
@@ -47,7 +51,7 @@ impl Response {
             return self;
         }
 
-        self.with_replaced_header(CSEQ, cseq)
+        self.with_replaced_header(MessageHeaderName::CSeq, cseq)
     }
 
     pub(crate) fn parse(

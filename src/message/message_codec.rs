@@ -1,4 +1,6 @@
-use crate::message::{MalformedMessage, Message, MessageError, MessageHeaders, ParsingMode};
+use crate::message::{
+    MalformedMessage, Message, MessageError, MessageHeaderName, MessageHeaders, ParsingMode,
+};
 
 const CRLF: &[u8] = b"\r\n";
 const DOUBLE_CRLF: &[u8] = b"\r\n\r\n";
@@ -32,7 +34,7 @@ impl tokio_util::codec::Decoder for MessageCodec {
         let start_line_length = start_line.len();
         let headers = MessageHeaders::try_from(header_lines)?;
 
-        let body_length: usize = match headers.get("Content-Length") {
+        let body_length: usize = match headers.get(MessageHeaderName::ContentLength) {
             Some(value) => {
                 value.parse().map_err(|_| MessageError::InvalidContentLength(value.to_owned()))?
             }
@@ -48,7 +50,7 @@ impl tokio_util::codec::Decoder for MessageCodec {
         let raw_message = src.split_to(message_length).freeze();
         let start_line = &raw_message[..start_line_length];
         let body = raw_message.slice(message_head_end + DOUBLE_CRLF.len()..);
-        let cseq = headers.get("CSeq").map(str::to_owned);
+        let cseq = headers.get(MessageHeaderName::CSeq).map(str::to_owned);
 
         Ok(Some(
             Message::new(start_line, headers, body, self.parsing_mode)

@@ -1,4 +1,4 @@
-image: rust:latest
+image: "$CI_REGISTRY/${CI_ROOT_PATH_PREFIX}docker/base-builder:latest"
 
 stages:
   - lint
@@ -12,13 +12,11 @@ variables:
 rustfmt:
   stage: lint
   script:
-    - rustup component add rustfmt
     - cargo fmt --check
 
 clippy:
   stage: lint
   script:
-    - rustup component add clippy
     - cargo clippy --all-targets -- -D warnings
 
 build:
@@ -35,9 +33,6 @@ coverage:
   stage: test
   variables:
     COVERAGE_THRESHOLD: 99
-  before_script:
-    - rustup component add llvm-tools-preview
-    - cargo install cargo-llvm-cov --locked --version 0.9.1
   script:
     - cargo llvm-cov --no-report
     - cargo llvm-cov report --cobertura --output-path cobertura.xml
@@ -63,8 +58,6 @@ publish:
   id_tokens:
     CRATES_IO_ID_TOKEN:
       aud: crates.io
-  before_script:
-    - apt-get update && apt-get install -y --no-install-recommends jq
   script:
     - VERSION=$(cargo pkgid | sed 's/.*[#@]//')
     - export VERSION

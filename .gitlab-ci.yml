@@ -67,20 +67,9 @@ publish:
     - apt-get update && apt-get install -y --no-install-recommends jq
   script:
     - VERSION=$(cargo pkgid | sed 's/.*[#@]//')
-    - |
-      if [ "$CI_COMMIT_TAG" != "v$VERSION" ]; then
-        echo "Tag $CI_COMMIT_TAG does not match the version in Cargo.toml ($VERSION)"
-        exit 1
-      fi
-    - |
-      RESPONSE=$(curl --silent --show-error -X POST https://crates.io/api/v1/trusted_publishing/tokens \
-        -H "Content-Type: application/json" \
-        -H "User-Agent: airtame-rtsp-gitlab-ci (https://gitlab.com/airtame/crates/rtsp)" \
-        -d "{\"jwt\": \"$CRATES_IO_ID_TOKEN\"}")
-      CARGO_REGISTRY_TOKEN=$(echo "$RESPONSE" | jq -r '.token // empty')
-      if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
-        echo "crates.io did not issue a publish token: $RESPONSE"
-        exit 1
-      fi
-      export CARGO_REGISTRY_TOKEN
+    - export VERSION
+    - .gitlab-ci/assert_true.sh '[ "$CI_COMMIT_TAG" = "v$VERSION" ]' "Tag $CI_COMMIT_TAG does not match the version in Cargo.toml ($VERSION)"
+    - CARGO_REGISTRY_TOKEN=$(.gitlab-ci/get_crates_io_token.sh)
+    - export CARGO_REGISTRY_TOKEN
+    - .gitlab-ci/assert_true.sh '[ -n "$CARGO_REGISTRY_TOKEN" ]' "crates.io did not issue a publish token"
     - cargo publish

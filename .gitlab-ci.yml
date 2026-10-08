@@ -1,9 +1,10 @@
-image: rust:latest
+image: "$CI_REGISTRY/${CI_ROOT_PATH_PREFIX}docker/base-builder:latest"
 
 stages:
   - lint
   - build
   - test
+  - publish
 
 variables:
   RUSTFLAGS: "-D warnings"
@@ -11,13 +12,11 @@ variables:
 rustfmt:
   stage: lint
   script:
-    - rustup component add rustfmt
     - cargo fmt --check
 
 clippy:
   stage: lint
   script:
-    - rustup component add clippy
     - cargo clippy --all-targets -- -D warnings
 
 build:
@@ -34,9 +33,6 @@ coverage:
   stage: test
   variables:
     COVERAGE_THRESHOLD: 99
-  before_script:
-    - rustup component add llvm-tools-preview
-    - cargo install cargo-llvm-cov --locked --version 0.9.1
   script:
     - cargo llvm-cov --no-report
     - cargo llvm-cov report --cobertura --output-path cobertura.xml
@@ -53,3 +49,20 @@ coverage:
         coverage_format: cobertura
         path: cobertura.xml
     expire_in: 1 month
+
+publish:
+  stage: publish
+  environment: release
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  id_tokens:
+    CRATES_IO_ID_TOKEN:
+      aud: crates.io
+  script:
+    - VERSION=$(cargo pkgid | sed 's/.*[#@]//')
+    - export VERSION
+    - .gitlab-ci/assert_true.sh '[ "$CI_COMMIT_TAG" = "v$VERSION" ]' "Tag $CI_COMMIT_TAG does not match the version in Cargo.toml ($VERSION)"
+    - CARGO_REGISTRY_TOKEN=$(.gitlab-ci/get_crates_io_token.sh)
+    - export CARGO_REGISTRY_TOKEN
+    - .gitlab-ci/assert_true.sh '[ -n "$CARGO_REGISTRY_TOKEN" ]' "crates.io did not issue a publish token"
+    - cargo publish

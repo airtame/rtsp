@@ -29,3 +29,27 @@ test:
   stage: test
   script:
     - cargo test
+
+coverage:
+  stage: test
+  variables:
+    COVERAGE_THRESHOLD: 99
+  before_script:
+    - rustup component add llvm-tools-preview
+    - cargo install cargo-llvm-cov --locked --version 0.9.1
+  script:
+    - cargo llvm-cov --no-report
+    - cargo llvm-cov report --cobertura --output-path cobertura.xml
+    - cargo llvm-cov report --html --output-dir coverage
+    - cargo llvm-cov report --summary-only | awk '/^TOTAL/ {print "Line coverage:", $10}'
+    - cargo llvm-cov report --summary-only --fail-under-lines $COVERAGE_THRESHOLD > /dev/null
+  coverage: '/Line coverage: \d+\.\d+%/'
+  artifacts:
+    expose_as: 'Coverage report'
+    paths:
+      - coverage/
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: cobertura.xml
+    expire_in: 1 month

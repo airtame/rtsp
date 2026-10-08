@@ -110,3 +110,9 @@ Connection and server tests run `#[tokio::test]` over real TCP sockets bound to 
 ## Git
 
 Branches are named `noissue-<kebab-description>` and commits are titled `[Noissue] <Imperative summary>`. Changes reach `main` through GitLab merge requests.
+
+GitLab is the source of truth. `github.com/airtame/rtsp`, which crates.io links to as the repository, is a GitLab push mirror of `main` and the tags, so never push to GitHub directly.
+
+## Releasing
+
+The crate is published on crates.io as `rtsp`. To release, bump `version` in `Cargo.toml` in a merge request, then push a `vX.Y.Z` tag on the merged commit. The tag pipeline runs the `publish` job after the other stages pass. The job fails if the tag doesn't match the `Cargo.toml` version. It publishes through crates.io Trusted Publishing: GitLab issues the job an ID token, and crates.io exchanges it for a publish token valid for 30 minutes, so no crates.io token is stored in CI. crates.io only accepts ID tokens from `.gitlab-ci.yml` in this project running in the `release` environment.
